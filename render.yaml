@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: cae-studio
+    runtime: docker
+    plan: free
+    rootDir: cloud
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: NASTRAN_ROOT
+        value: /n
+    healthCheckPath: /health
