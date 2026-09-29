@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Node / Expo
+node_modules/
+.expo/
+*.log
+dist/
+web-build/
+
+# OS
+.DS_Store
+Thumbs.db

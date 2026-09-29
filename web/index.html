@@ -1,0 +1,1391 @@
+<title>NASTRAN Design Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  /* Layout: fixed parameter rail (left) feeds a live results/viewer pane (right); stacks to one column under 860px */
+  :root{
+    --bg:#f4f5f3; --surface:#ffffff; --surface-2:#eceeea; --border:#d8dbd4;
+    --text:#1c211b; --text-dim:#5c6459; --text-faint:#8b9184;
+    --accent:#2b5c73; --accent-ink:#ffffff;
+    --deform:#c1541f; --deform-fill:rgba(193,84,31,0.12);
+    --ghost:#2b5c73; --ghost-fill:rgba(43,92,115,0.08);
+    --ok:#2f7a4f; --ok-fill:#e7f3ec;
+    --warn:#b8842c; --warn-fill:#faf1e0;
+    --err:#b6402f; --err-fill:#fbeae6;
+    --font-display:'IBM Plex Sans',system-ui,sans-serif;
+    --font-mono:'IBM Plex Mono',ui-monospace,'SF Mono',monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#151813; --surface:#1d2119; --surface-2:#262b21; --border:#343a2e;
+      --text:#eef0ea; --text-dim:#a7ae9e; --text-faint:#767d6d;
+      --accent:#7fb8d4; --accent-ink:#0d1a20;
+      --deform:#e08a54; --deform-fill:rgba(224,138,84,0.16);
+      --ghost:#7fb8d4; --ghost-fill:rgba(127,184,212,0.10);
+      --ok:#79c79a; --ok-fill:#193226;
+      --warn:#e0b25c; --warn-fill:#332608;
+      --err:#e2897a; --err-fill:#331b16;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#151813; --surface:#1d2119; --surface-2:#262b21; --border:#343a2e;
+    --text:#eef0ea; --text-dim:#a7ae9e; --text-faint:#767d6d;
+    --accent:#7fb8d4; --accent-ink:#0d1a20;
+    --deform:#e08a54; --deform-fill:rgba(224,138,84,0.16);
+    --ghost:#7fb8d4; --ghost-fill:rgba(127,184,212,0.10);
+    --ok:#79c79a; --ok-fill:#193226;
+    --warn:#e0b25c; --warn-fill:#332608;
+    --err:#e2897a; --err-fill:#331b16;
+    color-scheme: dark;
+  }
+
+  *{box-sizing:border-box;}
+  body{background:var(--bg); color:var(--text); font-family:var(--font-display); margin:0; padding-inline:0;}
+  h1,h2,h3{font-family:var(--font-display); text-wrap:balance; margin:0;}
+  .num{font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
+  button, select, input{font-family:inherit;}
+
+  .topbar{
+    display:flex; align-items:center; gap:14px; padding:14px 20px;
+    border-bottom:1px solid var(--border); background:var(--surface);
+    position:sticky; top:env(safe-area-inset-top,0px); z-index:10; flex-wrap:wrap;
+  }
+  .brand{display:flex; align-items:baseline; gap:9px;}
+  .brand .mark{
+    width:26px; height:26px; border-radius:6px; background:var(--accent); color:var(--accent-ink);
+    display:flex; align-items:center; justify-content:center; font-family:var(--font-mono);
+    font-weight:600; font-size:12px; flex-shrink:0;
+  }
+  .brand h1{font-size:17px; font-weight:700; letter-spacing:-0.01em;}
+  .brand .tag{font-size:12px; color:var(--text-faint); font-family:var(--font-mono);}
+  .conn{
+    margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px;
+    color:var(--text-dim); font-family:var(--font-mono);
+  }
+  .conn input{
+    background:var(--surface-2); border:1px solid var(--border); border-radius:6px;
+    padding:5px 8px; font-size:11.5px; color:var(--text); width:180px;
+  }
+  .pill{
+    display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:99px;
+    font-size:11px; font-weight:600; font-family:var(--font-mono);
+  }
+  .pill.ok{background:var(--ok-fill); color:var(--ok);}
+  .pill.err{background:var(--err-fill); color:var(--err);}
+  .pill.warn{background:var(--warn-fill); color:var(--warn);}
+  .pill::before{content:""; width:6px; height:6px; border-radius:99px; background:currentColor;}
+
+  .layout{display:flex; gap:0; align-items:flex-start; min-height:calc(100vh - 58px);}
+  .rail{
+    width:320px; flex-shrink:0; border-right:1px solid var(--border); background:var(--surface);
+    padding:20px; display:flex; flex-direction:column; gap:18px;
+    position:sticky; top:calc(58px + env(safe-area-inset-top,0px)); align-self:flex-start;
+    max-height:calc(100vh - 58px); overflow-y:auto;
+  }
+  .main{flex:1; min-width:0; padding:20px 24px 40px;}
+
+  .group{display:flex; flex-direction:column; gap:9px;}
+  .group-label{
+    font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;
+    color:var(--text-faint);
+  }
+  .field{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .field label{font-size:13px; color:var(--text-dim);}
+  .field input[type=number]{
+    width:92px; text-align:right; background:var(--surface-2); border:1px solid var(--border);
+    border-radius:7px; padding:7px 9px; font-size:13px; color:var(--text); font-family:var(--font-mono);
+  }
+  .field select{
+    background:var(--surface-2); border:1px solid var(--border); border-radius:7px;
+    padding:7px 9px; font-size:13px; color:var(--text); width:100%;
+  }
+  .field.stack{flex-direction:column; align-items:stretch; gap:5px;}
+  .unit{font-size:11px; color:var(--text-faint); font-family:var(--font-mono);}
+
+  .segmented{display:flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+  .segmented button{
+    flex:1; padding:8px 6px; font-size:12px; background:var(--surface-2); color:var(--text-dim);
+    border:none; cursor:pointer; border-right:1px solid var(--border);
+  }
+  .segmented button:last-child{border-right:none;}
+  .segmented button.active{background:var(--accent); color:var(--accent-ink); font-weight:600;}
+
+  .run-btn{
+    background:var(--accent); color:var(--accent-ink); border:none; border-radius:9px;
+    padding:12px; font-size:14px; font-weight:700; cursor:pointer; display:flex; align-items:center;
+    justify-content:center; gap:8px;
+  }
+  .run-btn:disabled{opacity:0.6; cursor:default;}
+  .run-btn .spin{
+    width:14px; height:14px; border-radius:99px; border:2px solid var(--accent-ink);
+    border-top-color:transparent; animation:spin 0.7s linear infinite; display:none;
+  }
+  .run-btn.loading .spin{display:inline-block;}
+  .run-btn.loading .label{display:none;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion: reduce){ .run-btn .spin{animation-duration:1.6s;} }
+
+  #assistantInput{
+    width:100%; resize:vertical; background:var(--surface-2); border:1px solid var(--border);
+    border-radius:7px; padding:8px 9px; font-size:12.5px; color:var(--text); font-family:inherit;
+  }
+  .ghost-btn{
+    background:var(--surface-2); color:var(--accent); border:1px solid var(--border); border-radius:8px;
+    padding:9px; font-size:12.5px; font-weight:600; cursor:pointer; display:flex; align-items:center;
+    justify-content:center; gap:7px;
+  }
+  .ghost-btn:disabled{opacity:0.6; cursor:default;}
+  .ghost-btn .spin{
+    width:12px; height:12px; border-radius:99px; border:2px solid var(--accent);
+    border-top-color:transparent; animation:spin 0.7s linear infinite; display:none;
+  }
+  .ghost-btn.loading .spin{display:inline-block;}
+  .ghost-btn.loading .label{display:none;}
+  .pill.off{background:var(--surface-2); color:var(--text-faint);}
+
+  .banner{
+    border-radius:9px; padding:11px 13px; font-size:12.5px; line-height:1.5; display:none;
+  }
+  .banner.show{display:block;}
+  .banner.err{background:var(--err-fill); color:var(--err);}
+  .explain-btn{
+    margin-top:8px; background:none; border:1px solid var(--err); color:var(--err); border-radius:6px;
+    padding:5px 10px; font-size:11.5px; font-weight:600; cursor:pointer;
+  }
+  .explain-box{
+    margin-top:8px; padding-top:8px; border-top:1px solid var(--err); font-size:12px; line-height:1.6;
+    display:none;
+  }
+  .explain-box.show{display:block;}
+  .banner code{font-family:var(--font-mono); font-size:11.5px;}
+
+  .hint{font-size:11.5px; color:var(--text-faint); line-height:1.5;}
+
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:10px; margin-bottom:18px;}
+  .tile{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:13px 14px;
+  }
+  .tile .k{font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:5px;}
+  .tile .v{font-size:21px; font-weight:700; font-family:var(--font-mono);}
+  .tile .v .u{font-size:12px; font-weight:500; color:var(--text-dim); margin-left:2px;}
+
+  .panel{background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px;}
+  .panel h2{font-size:13px; font-weight:600; color:var(--text-dim); margin-bottom:12px; text-transform:uppercase; letter-spacing:0.04em;}
+
+  .modechips{display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; margin-bottom:12px;}
+  .chip{
+    flex:0 0 auto; background:var(--surface-2); border:1px solid var(--border); border-radius:8px;
+    padding:7px 11px; font-size:11.5px; color:var(--text-dim); cursor:pointer; white-space:nowrap;
+  }
+  .chip b{display:block; font-size:12.5px; color:var(--text); font-family:var(--font-mono);}
+  .chip.active{border-color:var(--accent); background:var(--ghost-fill); color:var(--accent);}
+  .chip.active b{color:var(--accent);}
+
+  .stage{position:relative; background:var(--surface-2); border-radius:10px; overflow:hidden;}
+  .stage svg{width:100%; height:auto; display:block;}
+  .stage-hint{position:absolute; top:10px; left:12px; font-size:12px; font-weight:600; color:var(--text-dim); font-family:var(--font-mono);}
+
+  .viewer-controls{display:flex; align-items:center; gap:12px; margin-top:12px; font-size:12px; color:var(--text-dim);}
+  .viewer-controls input[type=range]{flex:1; accent-color:var(--accent);}
+  .play-btn{
+    background:var(--accent); color:var(--accent-ink); border:none; border-radius:7px;
+    width:30px; height:30px; font-size:12px; cursor:pointer; flex-shrink:0;
+  }
+  .legend{display:flex; gap:14px; margin-top:10px; font-size:11px; color:var(--text-faint); flex-wrap:wrap;}
+  .legend span{display:inline-flex; align-items:center; gap:5px;}
+  .sw{width:10px; height:10px; border-radius:2px; display:inline-block;}
+
+  .colorbar{margin-top:12px;}
+  .colorbar-strip{
+    height:12px; border-radius:6px;
+    background:linear-gradient(to right, #3b82f6, #2dd4bf, #84cc16, #facc15, #ef4444);
+  }
+  .colorbar-labels{display:flex; justify-content:space-between; font-size:10.5px; color:var(--text-faint); font-family:var(--font-mono); margin-top:4px;}
+
+  .tooltip{
+    position:absolute; pointer-events:none; background:var(--text); color:var(--bg);
+    font-family:var(--font-mono); font-size:11px; padding:6px 9px; border-radius:6px;
+    line-height:1.5; display:none; white-space:nowrap; z-index:5; transform:translate(-50%,-115%);
+  }
+  .tooltip.show{display:block;}
+  .tooltip b{font-size:12px;}
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th{text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-faint); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--border);}
+  td{padding:7px 8px; border-bottom:1px solid var(--border); color:var(--text-dim);}
+  td.num, th.num{text-align:right;}
+  tr:last-child td{border-bottom:none;}
+  tr.hi td{color:var(--text); font-weight:600;}
+
+  .empty{
+    display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;
+    padding:60px 20px; color:var(--text-faint); gap:8px;
+  }
+  .empty svg{opacity:0.5; margin-bottom:6px;}
+  .footer-note{font-size:11px; color:var(--text-faint); margin-top:24px; line-height:1.6; font-family:var(--font-mono);}
+
+  @media (max-width:860px){
+    .layout{flex-direction:column;}
+    .rail{width:100%; position:static; max-height:none; border-right:none; border-bottom:1px solid var(--border);}
+    .main{padding:16px;}
+    .conn input{width:130px;}
+  }
+</style>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="mark">N95</div>
+    <h1>Design Studio</h1>
+    <span class="tag">/ NASTRAN-95 solver</span>
+  </div>
+  <div class="conn">
+    <input id="apiBase" value="http://127.0.0.1:8000" spellcheck="false">
+    <span class="pill warn" id="connPill">checking&hellip;</span>
+  </div>
+</div>
+
+<div class="layout">
+  <aside class="rail">
+    <div class="group">
+      <div class="group-label">Geometry source</div>
+      <div class="segmented">
+        <button id="btnSrcParam" class="active">Parametric</button>
+        <button id="btnSrcUpload">Upload STL</button>
+      </div>
+    </div>
+
+    <div id="parametricRail">
+    <div class="group">
+      <div class="group-label">Ask the assistant <span class="pill" id="ollamaPill" style="margin-left:4px;"></span></div>
+      <textarea id="assistantInput" placeholder="e.g. 200mm aluminum cantilever, 10 elements, first 5 natural frequencies" rows="2"></textarea>
+      <button class="ghost-btn" id="assistantBtn"><span class="spin"></span><span class="label">Fill form from description</span></button>
+      <div class="hint" id="assistantHint">Runs a local model (Ollama) &mdash; nothing leaves this machine.</div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">Geometry</div>
+      <div class="field"><label for="lengthMm">Length</label><input type="number" id="lengthMm" value="100" min="1"><span class="unit">mm</span></div>
+      <div class="field"><label for="widthMm">Width</label><input type="number" id="widthMm" value="20" min="1"><span class="unit">mm</span></div>
+      <div class="field"><label for="thickMm">Thickness</label><input type="number" id="thickMm" value="2" min="0.1" step="0.1"><span class="unit">mm</span></div>
+      <div class="field"><label for="meshNx">Mesh, length</label><input type="number" id="meshNx" value="6" min="1" max="30"><span class="unit">elems</span></div>
+      <div class="field"><label for="meshNy">Mesh, width</label><input type="number" id="meshNy" value="3" min="1" max="12"><span class="unit">elems</span></div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">Material — MAT1</div>
+      <div class="field stack">
+        <select id="material">
+          <option value="steel" selected>Steel — E 210 GPa</option>
+          <option value="aluminum">Aluminum — E 69 GPa</option>
+          <option value="titanium">Titanium — E 114 GPa</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">Boundary condition</div>
+      <div class="field stack">
+        <select id="bc">
+          <option value="cantilever" selected>Cantilever — fixed one end</option>
+          <option value="simply_supported">Simply supported — both ends</option>
+          <option value="fixed_fixed">Fixed&ndash;fixed — both ends</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">Analysis — SOL</div>
+      <div class="segmented">
+        <button id="btnModes" class="active">Normal modes</button>
+        <button id="btnStatic">Static</button>
+        <button id="btnFreq">Freq. response</button>
+      </div>
+      <div id="modesFields" class="field"><label for="numModes">Modes to extract</label><input type="number" id="numModes" value="6" min="1" max="30"></div>
+      <div id="staticFields" style="display:none;">
+        <div class="field"><label for="loadN">Tip load</label><input type="number" id="loadN" value="50" min="0"><span class="unit">N</span></div>
+        <div class="field stack" style="margin-top:8px;">
+          <select id="loadDir">
+            <option value="z" selected>Z — transverse bending</option>
+            <option value="y">Y — in-plane, across width</option>
+            <option value="x">X — in-plane, along length</option>
+          </select>
+        </div>
+      </div>
+      <div id="freqRespFields" style="display:none;">
+        <div class="field"><label for="freqLoadN">Harmonic load</label><input type="number" id="freqLoadN" value="10" min="0"><span class="unit">N</span></div>
+        <div class="field stack" style="margin:8px 0;">
+          <select id="freqLoadDir">
+            <option value="z" selected>Z — transverse bending</option>
+            <option value="y">Y — in-plane, across width</option>
+            <option value="x">X — in-plane, along length</option>
+          </select>
+        </div>
+        <div class="field"><label for="freqStart">Sweep from</label><input type="number" id="freqStart" value="50" min="0"><span class="unit">Hz</span></div>
+        <div class="field"><label for="freqEnd">Sweep to</label><input type="number" id="freqEnd" value="300" min="1"><span class="unit">Hz</span></div>
+        <div class="field"><label for="freqPoints">Points</label><input type="number" id="freqPoints" value="41" min="2" max="200"><span class="unit"></span></div>
+        <div class="field"><label for="dampingG">Damping (G)</label><input type="number" id="dampingG" value="0.02" min="0" max="1" step="0.01"><span class="unit"></span></div>
+      </div>
+    </div>
+
+    <button class="run-btn" id="runBtn"><span class="spin"></span><span class="label">Run analysis</span></button>
+    <div class="banner err" id="errBanner">
+      <div id="errText"></div>
+      <button class="explain-btn" id="explainBtn">Explain this error</button>
+      <div class="explain-box" id="explainBox"></div>
+    </div>
+    <div class="hint">Solves on the NASTRAN-95 (COSMIC, 1976) binary running as a local FastAPI service: SOL 3 for normal modes, SOL 1 for static loads, SOL 8 for direct frequency response with structural damping.</div>
+    </div>
+
+    <div id="uploadRail" style="display:none;">
+      <div class="group">
+        <div class="group-label">Upload geometry</div>
+        <input type="file" id="stlFile" accept=".stl" style="font-size:12px;">
+        <div class="field"><label for="meshSize">Target element size</label><input type="number" id="meshSize" value="8" min="0.5" step="0.5"><span class="unit">mm</span></div>
+        <button class="ghost-btn" id="meshBtn"><span class="spin"></span><span class="label">Mesh geometry</span></button>
+        <div class="hint" id="meshHint">Tet-meshed locally via Gmsh &mdash; nothing leaves this machine. STL files only, 25MB limit.</div>
+      </div>
+
+      <div class="group" id="pickGroup" style="display:none;">
+        <div class="group-label">Boundary conditions</div>
+        <div class="hint">Click faces on the 3D model to assign them. Rotate by dragging, zoom with scroll.</div>
+        <div class="segmented">
+          <button id="btnPickFixed" class="active">Pick fixed</button>
+          <button id="btnPickLoad">Pick load</button>
+        </div>
+        <div class="field"><label>Fixed nodes</label><span class="num" id="nFixedCount">0</span></div>
+        <div class="field"><label>Loaded nodes</label><span class="num" id="nLoadedCount">0</span></div>
+        <button class="ghost-btn" id="clearPickBtn"><span class="label">Clear selection</span></button>
+      </div>
+
+      <div class="group" id="meshMaterialGroup" style="display:none;">
+        <div class="group-label">Material — MAT1</div>
+        <div class="field stack">
+          <select id="materialMesh">
+            <option value="steel" selected>Steel — E 210 GPa</option>
+            <option value="aluminum">Aluminum — E 69 GPa</option>
+            <option value="titanium">Titanium — E 114 GPa</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="group" id="meshAnalysisGroup" style="display:none;">
+        <div class="group-label">Analysis — SOL</div>
+        <div class="segmented">
+          <button id="btnMeshModes" class="active">Normal modes</button>
+          <button id="btnMeshStatic">Static</button>
+          <button id="btnMeshFreq">Freq. response</button>
+        </div>
+        <div id="meshModesFields" class="field"><label for="numModesMesh">Modes to extract</label><input type="number" id="numModesMesh" value="6" min="1" max="30"></div>
+        <div id="meshStaticFields" style="display:none;">
+          <div class="field"><label for="loadNMesh">Load</label><input type="number" id="loadNMesh" value="500" min="0"><span class="unit">N</span></div>
+          <div class="field stack" style="margin-top:8px;">
+            <select id="loadDirMesh">
+              <option value="z" selected>Z</option>
+              <option value="y">Y</option>
+              <option value="x">X</option>
+            </select>
+          </div>
+        </div>
+        <div id="meshFreqFields" style="display:none;">
+          <div class="field"><label for="freqLoadNMesh">Harmonic load</label><input type="number" id="freqLoadNMesh" value="200" min="0"><span class="unit">N</span></div>
+          <div class="field stack" style="margin:8px 0;">
+            <select id="freqLoadDirMesh">
+              <option value="z" selected>Z</option>
+              <option value="y">Y</option>
+              <option value="x">X</option>
+            </select>
+          </div>
+          <div class="field"><label for="freqStartMesh">Sweep from</label><input type="number" id="freqStartMesh" value="50" min="0"><span class="unit">Hz</span></div>
+          <div class="field"><label for="freqEndMesh">Sweep to</label><input type="number" id="freqEndMesh" value="500" min="1"><span class="unit">Hz</span></div>
+          <div class="field"><label for="freqPointsMesh">Points</label><input type="number" id="freqPointsMesh" value="41" min="2" max="200"></div>
+          <div class="field"><label for="dampingGMesh">Damping (G)</label><input type="number" id="dampingGMesh" value="0.02" min="0" max="1" step="0.01"></div>
+        </div>
+      </div>
+
+      <button class="run-btn" id="runMeshBtn" style="display:none;"><span class="spin"></span><span class="label">Run analysis</span></button>
+      <div class="banner err" id="meshErrBanner">
+        <div id="meshErrText"></div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="meshMain" style="display:none;">
+      <div class="empty" id="meshEmptyState">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 4 L34 12 V28 L20 36 L6 28 V12 Z" stroke="currentColor" stroke-width="1.6"/><path d="M20 4 V20 M20 20 L34 12 M20 20 L6 12 M20 20 V36" stroke="currentColor" stroke-width="1.2" opacity="0.6"/></svg>
+        <div style="font-size:14px; font-weight:600; color:var(--text-dim);">Upload an STL to begin</div>
+        <div style="font-size:12.5px; max-width:320px;">Tet-meshed locally with Gmsh, then click faces in 3D to mark fixed supports and load points &mdash; no manual boundary-condition guessing needed.</div>
+      </div>
+
+      <div id="meshViewerWrap" style="display:none;">
+        <div class="tiles" id="meshTiles"></div>
+
+        <div class="panel" id="meshViewerPanel">
+          <h2 id="meshViewerTitle">Geometry &mdash; click faces to assign boundary conditions</h2>
+          <div class="stage" style="height:420px; position:relative;">
+            <canvas id="meshCanvas" style="width:100%; height:100%; display:block;"></canvas>
+            <div class="stage-hint" id="meshStageHint"></div>
+            <div class="tooltip" id="meshTooltip"></div>
+          </div>
+          <div class="viewer-controls" id="meshResultControls" style="display:none;">
+            <button class="play-btn" id="meshPlayBtn">&#9654;</button>
+            <label style="display:flex; align-items:center; gap:8px; flex:1;">Amplitude<input type="range" id="meshAmpSlider" min="1" max="200" value="40"></label>
+          </div>
+          <div class="modechips" id="meshModechips" style="display:none;"></div>
+          <div class="colorbar" id="meshColorbar" style="display:none;"></div>
+          <div class="legend" id="meshLegend">
+            <span><span class="sw" style="background:#60a5fa;"></span>Fixed</span>
+            <span><span class="sw" style="background:#f97316;"></span>Load</span>
+          </div>
+        </div>
+
+        <div class="panel" id="meshFrfPanel" style="display:none;">
+          <h2 id="meshFrfTitle">Frequency response function</h2>
+          <div class="stage" style="background:var(--surface);">
+            <svg id="svgMeshFrf" viewBox="0 0 640 340"></svg>
+          </div>
+        </div>
+
+        <div class="panel" id="meshModeTablePanel" style="display:none;">
+          <h2>Mode table</h2>
+          <table>
+            <thead><tr><th>Mode</th><th class="num">Frequency</th></tr></thead>
+            <tbody id="meshFreqTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="emptyState" class="empty">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="14" width="14" height="14" stroke="currentColor" stroke-width="1.6"/><rect x="22" y="8" width="14" height="14" stroke="currentColor" stroke-width="1.6"/><rect x="22" y="26" width="14" height="8" stroke="currentColor" stroke-width="1.6"/><line x1="18" y1="21" x2="22" y2="15" stroke="currentColor" stroke-width="1.6"/><line x1="18" y1="21" x2="22" y2="29" stroke="currentColor" stroke-width="1.6"/></svg>
+      <div style="font-size:14px; font-weight:600; color:var(--text-dim);">Set parameters, then run the analysis</div>
+      <div style="font-size:12.5px; max-width:320px;">The defaults model a 100&times;20&times;2mm steel cantilever &mdash; the same case validated earlier against Euler&ndash;Bernoulli beam theory (167&nbsp;Hz predicted, 167.6&nbsp;Hz solved).</div>
+    </div>
+
+    <div id="results" style="display:none;">
+      <div class="tiles" id="tiles"></div>
+
+      <div class="panel" id="modesPanel" style="display:none;">
+        <h2>Extracted frequencies</h2>
+        <div class="modechips" id="modechips"></div>
+        <div class="stage">
+          <div class="stage-hint" id="freqLabel"></div>
+          <svg id="svg" viewBox="0 0 640 360"></svg>
+        </div>
+        <div class="viewer-controls">
+          <button class="play-btn" id="playBtn">&#9654;</button>
+          <label style="display:flex; align-items:center; gap:8px; flex:1;">Amplitude<input type="range" id="ampSlider" min="1" max="40" value="16"></label>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--ghost); opacity:.5;"></span>Undeformed</span>
+          <span><span class="sw" style="background:var(--deform);"></span>Deformed (animated)</span>
+        </div>
+      </div>
+
+      <div class="panel" id="staticPanel" style="display:none;">
+        <h2>Deformed shape</h2>
+        <div class="stage">
+          <div class="stage-hint" id="staticLabel">Static</div>
+          <svg id="svgStatic" viewBox="0 0 640 360"></svg>
+        </div>
+        <div class="viewer-controls">
+          <button class="play-btn" id="playBtnStatic">&#9654;</button>
+          <label style="display:flex; align-items:center; gap:8px; flex:1;">Amplitude<input type="range" id="ampSliderStatic" min="1" max="40" value="16"></label>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--ghost); opacity:.5;"></span>Undeformed</span>
+          <span><span class="sw" style="background:var(--deform);"></span>Under load (animated)</span>
+        </div>
+      </div>
+
+      <div class="panel" id="stressPanel" style="display:none;">
+        <h2>Stress contour &mdash; von Mises</h2>
+        <div class="stage">
+          <div class="stage-hint" id="stressHint">Hover an element</div>
+          <svg id="svgStress" viewBox="0 0 640 380"></svg>
+          <div class="tooltip" id="stressTooltip"></div>
+        </div>
+        <div class="colorbar" id="colorbar"></div>
+        <div class="viewer-controls">
+          <label style="display:flex; align-items:center; gap:8px; flex:1;">Amplitude<input type="range" id="ampSliderStress" min="1" max="40" value="16"></label>
+        </div>
+      </div>
+
+      <div class="panel" id="tablePanel" style="display:none;">
+        <h2>Mode table</h2>
+        <table>
+          <thead><tr><th>Mode</th><th class="num">Frequency</th></tr></thead>
+          <tbody id="freqTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="panel" id="frfPanel" style="display:none;">
+        <h2 id="frfTitle">Frequency response function</h2>
+        <div class="stage" style="background:var(--surface);">
+          <svg id="svgFrf" viewBox="0 0 640 340"></svg>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--deform);"></span>Magnitude</span>
+          <span><span class="sw" style="background:var(--ghost); opacity:.6;"></span>Peak (natural frequency)</span>
+        </div>
+      </div>
+
+      <div class="footer-note" id="deckMeta"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var apiBaseEl = $('apiBase'), connPill = $('connPill'), runBtn = $('runBtn'), errBanner = $('errBanner');
+  var analysisMode = 'modes';
+
+  $('btnModes').addEventListener('click', function(){ setAnalysis('modes'); });
+  $('btnStatic').addEventListener('click', function(){ setAnalysis('static'); });
+  $('btnFreq').addEventListener('click', function(){ setAnalysis('freq_response'); });
+  function setAnalysis(mode){
+    analysisMode = mode;
+    $('btnModes').classList.toggle('active', mode==='modes');
+    $('btnStatic').classList.toggle('active', mode==='static');
+    $('btnFreq').classList.toggle('active', mode==='freq_response');
+    $('modesFields').style.display = mode==='modes' ? 'flex' : 'none';
+    $('staticFields').style.display = mode==='static' ? 'block' : 'none';
+    $('freqRespFields').style.display = mode==='freq_response' ? 'block' : 'none';
+  }
+
+  function apiBase(){ return apiBaseEl.value.replace(/\/+$/,''); }
+
+  var ollamaPill = $('ollamaPill');
+
+  async function checkHealth(){
+    connPill.className = 'pill warn'; connPill.textContent = 'checking…';
+    try{
+      var ctrl = new AbortController();
+      var t = setTimeout(function(){ ctrl.abort(); }, 4000);
+      var res = await fetch(apiBase() + '/health', { signal: ctrl.signal });
+      clearTimeout(t);
+      var data = await res.json();
+      if (data.ok){ connPill.className = 'pill ok'; connPill.textContent = 'connected'; }
+      else { connPill.className = 'pill err'; connPill.textContent = 'server error'; }
+      if (data.ollama_ok){ ollamaPill.className = 'pill ok'; ollamaPill.textContent = 'model ready'; }
+      else { ollamaPill.className = 'pill off'; ollamaPill.textContent = 'model offline'; }
+    } catch(e){
+      connPill.className = 'pill err'; connPill.textContent = 'unreachable';
+      ollamaPill.className = 'pill off'; ollamaPill.textContent = 'model offline';
+    }
+  }
+  apiBaseEl.addEventListener('change', checkHealth);
+  checkHealth();
+  setTimeout(checkHealth, 6000);
+
+  var lastErrorText = '';
+
+  function showError(msg){
+    $('errText').innerHTML = msg;
+    errBanner.classList.add('show');
+    $('explainBox').classList.remove('show');
+    $('explainBox').textContent = '';
+    lastErrorText = String(msg).replace(/<[^>]+>/g, ' ');
+  }
+  function clearError(){
+    errBanner.classList.remove('show');
+    $('errText').textContent = '';
+    $('explainBox').classList.remove('show');
+    $('explainBox').textContent = '';
+  }
+
+  $('explainBtn').addEventListener('click', async function(){
+    var btn = $('explainBtn'), box = $('explainBox');
+    btn.disabled = true; btn.textContent = 'Thinking…';
+    try {
+      var res = await fetch(apiBase() + '/assistant/explain', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ error_text: lastErrorText })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      var data = await res.json();
+      box.textContent = data.explanation;
+      box.classList.add('show');
+    } catch(e){
+      box.textContent = 'Could not reach the local assistant: ' + (e.message || e);
+      box.classList.add('show');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Explain this error';
+    }
+  });
+
+  $('assistantBtn').addEventListener('click', async function(){
+    var btn = $('assistantBtn'), input = $('assistantInput'), hint = $('assistantHint');
+    var text = input.value.trim();
+    if (!text) return;
+    btn.classList.add('loading'); btn.disabled = true;
+    hint.textContent = 'Asking the local model…';
+    try {
+      var res = await fetch(apiBase() + '/assistant/parse', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ text: text })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      var p = await res.json();
+      $('lengthMm').value = p.length_mm;
+      $('widthMm').value = p.width_mm;
+      $('thickMm').value = p.thickness_mm;
+      $('meshNx').value = p.nx;
+      $('meshNy').value = p.ny;
+      $('material').value = p.material;
+      $('bc').value = p.bc;
+      setAnalysis(p.analysis);
+      $('numModes').value = p.num_modes;
+      $('loadN').value = p.load_n;
+      $('loadDir').value = p.load_dir;
+      $('freqLoadN').value = p.load_n;
+      $('freqLoadDir').value = p.load_dir;
+      $('freqStart').value = p.freq_start_hz;
+      $('freqEnd').value = p.freq_end_hz;
+      $('freqPoints').value = p.num_freq_points;
+      $('dampingG').value = p.damping_g;
+      hint.textContent = 'Form filled — review the values, then run the analysis.';
+    } catch(e){
+      hint.textContent = 'Could not parse that: ' + (e.message || e);
+    } finally {
+      btn.classList.remove('loading'); btn.disabled = false;
+    }
+  });
+
+  runBtn.addEventListener('click', runAnalysis);
+
+  async function runAnalysis(){
+    clearError();
+    runBtn.classList.add('loading'); runBtn.disabled = true;
+    var req = {
+      length_mm: parseFloat($('lengthMm').value),
+      width_mm: parseFloat($('widthMm').value),
+      thickness_mm: parseFloat($('thickMm').value),
+      nx: parseInt($('meshNx').value, 10),
+      ny: parseInt($('meshNy').value, 10),
+      material: $('material').value,
+      bc: $('bc').value,
+      analysis: analysisMode,
+      num_modes: parseInt($('numModes').value, 10) || 6,
+      freq_max_hz: 200000,
+      load_n: analysisMode==='freq_response' ? (parseFloat($('freqLoadN').value) || 0) : (parseFloat($('loadN').value) || 0),
+      load_dir: analysisMode==='freq_response' ? $('freqLoadDir').value : $('loadDir').value,
+      freq_start_hz: parseFloat($('freqStart').value) || 0,
+      freq_end_hz: parseFloat($('freqEnd').value) || 300,
+      num_freq_points: parseInt($('freqPoints').value, 10) || 41,
+      damping_g: parseFloat($('dampingG').value)
+    };
+    try {
+      var res = await fetch(apiBase() + '/analyze', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req)
+      });
+      if (!res.ok){
+        var text = await res.text();
+        throw new Error('Server responded ' + res.status + ': ' + text.slice(0,300));
+      }
+      var data = await res.json();
+      renderResults(data);
+    } catch(e){
+      showError('Could not complete the analysis.<br><code>' + String(e.message || e).replace(/</g,'&lt;') + '</code><br>Check that the FastAPI backend is running and reachable at the address above.');
+    } finally {
+      runBtn.classList.remove('loading'); runBtn.disabled = false;
+    }
+  }
+
+  // ---------- isometric mesh viewer (shared projection) ----------
+  var svgNS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs){
+    var e = document.createElementNS(svgNS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function makeProjector(nodes, viewW, viewH){
+    var cos30 = Math.cos(Math.PI/6), sin30 = Math.sin(Math.PI/6);
+    var xs=[], ys=[];
+    Object.keys(nodes).forEach(function(id){ xs.push(nodes[id][0]); ys.push(nodes[id][1]); });
+    var minX=Math.min.apply(null,xs), maxX=Math.max.apply(null,xs);
+    var minY=Math.min.apply(null,ys), maxY=Math.max.apply(null,ys);
+    var margin = Math.max(maxX-minX, maxY-minY) * 0.4 + 25;
+    function project(x,y,z){
+      return [ (x-y)*cos30, (x+y)*sin30 - z ];
+    }
+    var corners = [[minX-margin,minY-margin,-margin],[maxX+margin,minY-margin,-margin],
+                   [minX-margin,maxY+margin,margin],[maxX+margin,maxY+margin,margin]];
+    var pxs=[], pys=[];
+    corners.forEach(function(c){ var p=project(c[0],c[1],c[2]); pxs.push(p[0]); pys.push(p[1]); });
+    var bw = Math.max.apply(null,pxs)-Math.min.apply(null,pxs);
+    var bh = Math.max.apply(null,pys)-Math.min.apply(null,pys);
+    var scale = Math.min(viewW/bw, viewH/bh) * 0.9;
+    var cx = viewW/2 - ((Math.max.apply(null,pxs)+Math.min.apply(null,pxs))/2)*scale;
+    var cy = viewH/2 - ((Math.max.apply(null,pys)+Math.min.apply(null,pys))/2)*scale;
+    return function(x,y,z){
+      var p = project(x,y,z);
+      return [cx + p[0]*scale, cy + p[1]*scale];
+    };
+  }
+  function polyPoints(fn, quad){
+    return quad.map(function(id){ var p = fn(id); return p[0].toFixed(2)+','+p[1].toFixed(2); }).join(' ');
+  }
+  function drawFrame(svgEl, mesh, vectors, amp, phase, fixedSet){
+    svgEl.innerHTML = '';
+    var vb = svgEl.viewBox.baseVal;
+    var toScreen = makeProjector(mesh.nodes, vb.width, vb.height);
+    function undefP(id){ var n = mesh.nodes[id]; return toScreen(n[0], n[1], n[2]); }
+    function defP(id){
+      var n = mesh.nodes[id], v = vectors[id] || [0,0,0,0,0,0];
+      return toScreen(n[0]+v[0]*amp*phase, n[1]+v[1]*amp*phase, n[2]+v[2]*amp*phase);
+    }
+    mesh.elements.forEach(function(q){
+      svgEl.appendChild(el('polygon', { points: polyPoints(undefP, q), fill:'none', stroke:'var(--ghost)', 'stroke-opacity':'0.4', 'stroke-width':'1.2', 'stroke-dasharray':'4,3' }));
+    });
+    mesh.elements.forEach(function(q){
+      svgEl.appendChild(el('polygon', { points: polyPoints(defP, q), fill:'var(--deform-fill)', stroke:'var(--deform)', 'stroke-width':'2', 'stroke-linejoin':'round' }));
+    });
+    Object.keys(mesh.nodes).forEach(function(idStr){
+      var id = parseInt(idStr,10);
+      var isFixed = fixedSet.has(id);
+      var p = defP(id);
+      svgEl.appendChild(el('circle', { cx:p[0], cy:p[1], r: isFixed?4.5:3.6, fill: isFixed?'var(--text)':'var(--deform)', stroke:'var(--surface-2)', 'stroke-width':'1.2' }));
+    });
+  }
+
+  // ---------- results rendering ----------
+  var lastResult = null, modeIndex = 0, playing = true, t0 = performance.now();
+  var animHandle = null;
+
+  function renderResults(data){
+    lastResult = data;
+    $('emptyState').style.display = 'none';
+    $('results').style.display = 'block';
+
+    var fixedSet = new Set(data.mesh.fixed_ids);
+    var nNodes = Object.keys(data.mesh.nodes).length;
+    var nElems = data.mesh.elements.length;
+
+    var tiles = [];
+    tiles.push(tile('Nodes', nNodes, ''));
+    tiles.push(tile('Elements', nElems, 'CQUAD4'));
+    if (data.analysis === 'modes'){
+      var f1 = data.modes[0] ? data.modes[0].freq_hz : 0;
+      tiles.push(tile('Mode 1', f1.toFixed(1), 'Hz'));
+      tiles.push(tile('Highest extracted', data.modes[data.modes.length-1].freq_hz.toFixed(0), 'Hz'));
+    } else if (data.analysis === 'static'){
+      tiles.push(tile('Max deflection', data.static.max_deflection_mm.toFixed(3), 'mm'));
+      tiles.push(tile('Max von Mises', data.static.max_von_mises_mpa.toFixed(1), 'MPa'));
+      tiles.push(tile('Load', $('loadN').value, 'N'));
+    } else {
+      tiles.push(tile('Peak response', data.freq_response.peak_magnitude_mm.toFixed(3), 'mm'));
+      tiles.push(tile('At frequency', data.freq_response.peak_freq_hz.toFixed(1), 'Hz'));
+    }
+    $('tiles').innerHTML = tiles.join('');
+
+    var solLabel = {modes:'3 (normal modes)', static:'1 (statics)', freq_response:'8 (freq. response)'}[data.analysis];
+    $('deckMeta').textContent = data.geometry.length_mm + '×' + data.geometry.width_mm + '×' + data.geometry.thickness_mm +
+      'mm · ' + data.geometry.bc + ' · SOL ' + solLabel;
+
+    if (animHandle) cancelAnimationFrame(animHandle);
+
+    $('modesPanel').style.display = 'none';
+    $('staticPanel').style.display = 'none';
+    $('stressPanel').style.display = 'none';
+    $('tablePanel').style.display = 'none';
+    $('frfPanel').style.display = 'none';
+
+    if (data.analysis === 'modes'){
+      $('modesPanel').style.display = 'block';
+      $('tablePanel').style.display = 'block';
+      renderModes(data, fixedSet);
+    } else if (data.analysis === 'static'){
+      $('staticPanel').style.display = 'block';
+      $('stressPanel').style.display = 'block';
+      renderStatic(data, fixedSet);
+    } else {
+      $('frfPanel').style.display = 'block';
+      renderFreqResponse(data);
+    }
+  }
+
+  function tile(k, v, u){
+    return '<div class="tile"><div class="k">'+k+'</div><div class="v">'+v+(u?' <span class="u">'+u+'</span>':'')+'</div></div>';
+  }
+
+  function renderModes(data, fixedSet){
+    modeIndex = 0; playing = true;
+    var chipsEl = $('modechips');
+    chipsEl.innerHTML = '';
+    data.modes.forEach(function(m, i){
+      var chip = document.createElement('div');
+      chip.className = 'chip' + (i===0 ? ' active' : '');
+      chip.innerHTML = '<b>Mode ' + m.mode + '</b>' + m.freq_hz.toFixed(1) + ' Hz';
+      chip.addEventListener('click', function(){
+        modeIndex = i;
+        Array.prototype.forEach.call(chipsEl.children, function(c,j){ c.classList.toggle('active', j===i); });
+      });
+      chipsEl.appendChild(chip);
+    });
+
+    var tbody = $('freqTableBody');
+    tbody.innerHTML = data.modes.map(function(m){
+      return '<tr' + (m.mode===1?' class="hi"':'') + '><td>Mode ' + m.mode + '</td><td class="num num">' + m.freq_hz.toFixed(2) + ' Hz</td></tr>';
+    }).join('');
+
+    var svgEl = $('svg'), ampSlider = $('ampSlider'), playBtn = $('playBtn'), freqLabel = $('freqLabel');
+    playBtn.onclick = function(){
+      playing = !playing;
+      playBtn.innerHTML = playing ? '&#9654;' : '&#10074;&#10074;';
+      if (playing) t0 = performance.now();
+    };
+    function loop(){
+      var mode = data.modes[modeIndex];
+      var amp = parseFloat(ampSlider.value);
+      var phase = playing ? Math.sin((performance.now()-t0)/600) : 1;
+      drawFrame(svgEl, data.mesh, mode.vectors, amp, phase, fixedSet);
+      freqLabel.textContent = 'Mode ' + mode.mode + ' — ' + mode.freq_hz.toFixed(1) + ' Hz';
+      animHandle = requestAnimationFrame(loop);
+    }
+    loop();
+  }
+
+  var STRESS_STOPS = [
+    [0.00, [59,130,246]],  // blue
+    [0.25, [45,212,191]],  // teal
+    [0.50, [132,204,22]],  // lime
+    [0.75, [250,204,21]],  // yellow
+    [1.00, [239,68,68]]    // red
+  ];
+  function stressColor(t){
+    t = Math.max(0, Math.min(1, t));
+    for (var i = 0; i < STRESS_STOPS.length - 1; i++){
+      var a = STRESS_STOPS[i], b = STRESS_STOPS[i+1];
+      if (t >= a[0] && t <= b[0]){
+        var f = (b[0] === a[0]) ? 0 : (t - a[0]) / (b[0] - a[0]);
+        var r = Math.round(a[1][0] + (b[1][0]-a[1][0])*f);
+        var g = Math.round(a[1][1] + (b[1][1]-a[1][1])*f);
+        var bl = Math.round(a[1][2] + (b[1][2]-a[1][2])*f);
+        return 'rgb(' + r + ',' + g + ',' + bl + ')';
+      }
+    }
+    return 'rgb(239,68,68)';
+  }
+
+  // Static deflection isn't oscillatory like a mode shape, so instead of a
+  // sin() vibration we animate a smooth "loading" breath from undeformed (0)
+  // to the full computed deflection (1) and back -- one shared phase drives
+  // both the deflection view and the stress contour, since they're the same
+  // physical state under two different colorings.
+  function renderStatic(data, fixedSet){
+    var svgEl = $('svgStatic'), ampSlider = $('ampSliderStatic'), playBtn = $('playBtnStatic');
+    var svgStress = $('svgStress'), ampSliderStress = $('ampSliderStress'), tooltip = $('stressTooltip'), hint = $('stressHint');
+    var stress = data.static.element_stress;
+    var maxVm = data.static.max_von_mises_mpa || 1;
+
+    $('colorbar').innerHTML =
+      '<div class="colorbar-strip"></div>' +
+      '<div class="colorbar-labels"><span>0 MPa</span><span>' + (maxVm/2).toFixed(0) + ' MPa</span><span>' + maxVm.toFixed(0) + ' MPa</span></div>';
+
+    playing = true;
+    playBtn.innerHTML = '&#10074;&#10074;';
+    playBtn.onclick = function(){
+      playing = !playing;
+      playBtn.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+      if (playing) t0 = performance.now();
+    };
+
+    function drawDeflection(loadPhase){
+      var amp = parseFloat(ampSlider.value) * loadPhase;
+      drawFrame(svgEl, data.mesh, data.static.vectors, amp, 1, fixedSet);
+    }
+
+    function drawStress(loadPhase){
+      svgStress.innerHTML = '';
+      var vb = svgStress.viewBox.baseVal;
+      var amp = parseFloat(ampSliderStress.value) * loadPhase;
+      var toScreen = makeProjector(data.mesh.nodes, vb.width, vb.height);
+      function defP(id){
+        var n = data.mesh.nodes[id], v = data.static.vectors[id] || [0,0,0,0,0,0];
+        return toScreen(n[0]+v[0]*amp, n[1]+v[1]*amp, n[2]+v[2]*amp);
+      }
+      data.mesh.elements.forEach(function(q, idx){
+        var eid = idx + 1;
+        var s = stress[eid];
+        var vm = s ? s.von_mises_max : 0;
+        var poly = el('polygon', {
+          points: polyPoints(defP, q), fill: stressColor((vm / maxVm) * loadPhase),
+          stroke: 'var(--surface)', 'stroke-width':'1', 'data-eid': eid, 'data-vm': vm.toFixed(2)
+        });
+        poly.addEventListener('mousemove', function(ev){
+          var rect = svgStress.getBoundingClientRect();
+          var x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+          tooltip.style.left = x + 'px';
+          tooltip.style.top = y + 'px';
+          tooltip.innerHTML = '<b>Element ' + eid + '</b><br>von Mises: ' + vm.toFixed(1) + ' MPa' +
+            (s ? '<br>&sigma;x: ' + s.bottom.normal_x.toFixed(1) + ' &middot; &sigma;y: ' + s.bottom.normal_y.toFixed(1) + ' &middot; &tau;xy: ' + s.bottom.shear_xy.toFixed(1) : '');
+          tooltip.classList.add('show');
+          hint.textContent = 'Element ' + eid + ' — ' + vm.toFixed(1) + ' MPa';
+        });
+        poly.addEventListener('mouseleave', function(){
+          tooltip.classList.remove('show');
+          hint.textContent = 'Hover an element';
+        });
+        svgStress.appendChild(poly);
+      });
+      Object.keys(data.mesh.nodes).forEach(function(idStr){
+        var id = parseInt(idStr,10);
+        var isFixed = fixedSet.has(id);
+        var p = defP(id);
+        svgStress.appendChild(el('circle', { cx:p[0], cy:p[1], r: isFixed?3.6:2.4, fill: 'var(--text)', opacity: isFixed?0.9:0.35 }));
+      });
+    }
+
+    function loop(){
+      var loadPhase = playing ? (1 - Math.cos((performance.now()-t0)/900))/2 : 1;
+      drawDeflection(loadPhase);
+      drawStress(loadPhase);
+      animHandle = requestAnimationFrame(loop);
+    }
+    loop();
+  }
+
+  function renderFreqResponse(data, titleElId, svgElId){
+    titleElId = titleElId || 'frfTitle'; svgElId = svgElId || 'svgFrf';
+    var fr = data.freq_response;
+    var pts = fr.points;
+    $(titleElId).textContent = 'Frequency response — ' + fr.component.toUpperCase() + ' displacement at node ' + fr.monitor_node;
+
+    var svgEl = $(svgElId);
+    svgEl.innerHTML = '';
+    var W = 640, H = 340;
+    var padL = 56, padR = 18, padT = 16, padB = 34;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+
+    var freqs = pts.map(function(p){ return p.freq_hz; });
+    var mags = pts.map(function(p){ return p.magnitude_mm; });
+    var xMin = Math.min.apply(null, freqs), xMax = Math.max.apply(null, freqs);
+    var yMax = Math.max.apply(null, mags) * 1.18 || 1;
+
+    function X(f){ return padL + (f - xMin) / (xMax - xMin || 1) * plotW; }
+    function Y(m){ return padT + plotH - (m / yMax) * plotH; }
+
+    function el(tag, attrs){
+      var e = document.createElementNS(svgNS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      return e;
+    }
+
+    // gridlines + y labels
+    var yTicks = 5;
+    for (var i = 0; i <= yTicks; i++){
+      var yv = yMax * i / yTicks;
+      var yy = Y(yv);
+      svgEl.appendChild(el('line', { x1:padL, y1:yy, x2:W-padR, y2:yy, stroke:'var(--border)', 'stroke-width':'1' }));
+      var lbl = el('text', { x:padL-8, y:yy+4, 'text-anchor':'end', 'font-size':'10', fill:'var(--text-faint)', 'font-family':'var(--font-mono)' });
+      lbl.textContent = yv.toFixed(yMax < 5 ? 2 : 1);
+      svgEl.appendChild(lbl);
+    }
+    var xTicks = 6;
+    for (var i = 0; i <= xTicks; i++){
+      var xv = xMin + (xMax - xMin) * i / xTicks;
+      var xx = X(xv);
+      var lbl = el('text', { x:xx, y:H-padB+16, 'text-anchor':'middle', 'font-size':'10', fill:'var(--text-faint)', 'font-family':'var(--font-mono)' });
+      lbl.textContent = xv.toFixed(0);
+      svgEl.appendChild(lbl);
+    }
+    var axLbl = el('text', { x:W/2, y:H-4, 'text-anchor':'middle', 'font-size':'10.5', fill:'var(--text-dim)' });
+    axLbl.textContent = 'Frequency (Hz)';
+    svgEl.appendChild(axLbl);
+    var yAxLbl = el('text', { x:14, y:padT+plotH/2, 'text-anchor':'middle', 'font-size':'10.5', fill:'var(--text-dim)',
+      transform:'rotate(-90, 14, ' + (padT+plotH/2) + ')' });
+    yAxLbl.textContent = 'Displacement magnitude (mm)';
+    svgEl.appendChild(yAxLbl);
+
+    // area fill + line
+    var linePts = pts.map(function(p){ return X(p.freq_hz).toFixed(2) + ',' + Y(p.magnitude_mm).toFixed(2); });
+    var areaPts = ['' + X(pts[0].freq_hz).toFixed(2) + ',' + Y(0).toFixed(2)].concat(linePts).concat([X(pts[pts.length-1].freq_hz).toFixed(2) + ',' + Y(0).toFixed(2)]);
+    svgEl.appendChild(el('polygon', { points: areaPts.join(' '), fill:'var(--deform-fill)', stroke:'none' }));
+    svgEl.appendChild(el('polyline', { points: linePts.join(' '), fill:'none', stroke:'var(--deform)', 'stroke-width':'2.2', 'stroke-linejoin':'round' }));
+
+    // peak marker
+    var peakX = X(fr.peak_freq_hz), peakY = Y(fr.peak_magnitude_mm);
+    svgEl.appendChild(el('line', { x1:peakX, y1:padT, x2:peakX, y2:padT+plotH, stroke:'var(--ghost)', 'stroke-width':'1.3', 'stroke-dasharray':'4,3', 'stroke-opacity':'0.6' }));
+    svgEl.appendChild(el('circle', { cx:peakX, cy:peakY, r:4.5, fill:'var(--deform)', stroke:'var(--surface)', 'stroke-width':'1.5' }));
+    var peakLbl = el('text', { x: peakX + (peakX > W - 120 ? -8 : 8), y: padT + 12,
+      'text-anchor': peakX > W - 120 ? 'end' : 'start', 'font-size':'11', 'font-weight':'600', fill:'var(--text)', 'font-family':'var(--font-mono)' });
+    peakLbl.textContent = fr.peak_freq_hz.toFixed(1) + ' Hz';
+    svgEl.appendChild(peakLbl);
+  }
+
+  // ==================== Upload / tet-mesh workflow ====================
+  var meshState = {
+    meshId: null, nodes: null, boundaryFaces: null, bbox: null,
+    fixedIds: new Set(), loadedIds: new Set(), pickMode: 'fixed',
+    analysisMode: 'modes', lastResult: null, resultAnimHandle: null, resultPlaying: true, resultT0: 0
+  };
+  var three = { scene:null, camera:null, renderer:null, controls:null, mesh:null, geom:null, raf:null };
+
+  $('btnSrcParam').addEventListener('click', function(){ setGeomSource('param'); });
+  $('btnSrcUpload').addEventListener('click', function(){ setGeomSource('upload'); });
+  function setGeomSource(src){
+    $('btnSrcParam').classList.toggle('active', src==='param');
+    $('btnSrcUpload').classList.toggle('active', src==='upload');
+    $('parametricRail').style.display = src==='param' ? 'block' : 'none';
+    $('uploadRail').style.display = src==='upload' ? 'block' : 'none';
+    $('meshMain').style.display = src==='upload' ? 'block' : 'none';
+    $('emptyState').style.display = src==='param' && !lastResult ? 'flex' : 'none';
+    $('results').style.display = src==='param' && lastResult ? 'block' : 'none';
+    if (src === 'upload') requestAnimationFrame(function(){ onMeshCanvasResize(); });
+  }
+
+  function initThree(){
+    if (three.renderer) return;
+    var canvas = $('meshCanvas');
+    three.renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+    three.scene = new THREE.Scene();
+    three.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
+    three.controls = new THREE.OrbitControls(three.camera, canvas);
+    three.controls.enableDamping = true;
+    three.controls.dampingFactor = 0.08;
+
+    var hemi = new THREE.HemisphereLight(0xffffff, 0x5a5850, 1.3);
+    three.scene.add(hemi);
+    var dir = new THREE.DirectionalLight(0xffffff, 0.55);
+    dir.position.set(1, 1.5, 1);
+    three.scene.add(dir);
+    var dir2 = new THREE.DirectionalLight(0xffffff, 0.35);
+    dir2.position.set(-1, -1, -0.5);
+    three.scene.add(dir2);
+
+    var raycaster = new THREE.Raycaster();
+    var mouse = new THREE.Vector2();
+    canvas.addEventListener('click', function(ev){
+      if (!three.mesh) return;
+      var rect = canvas.getBoundingClientRect();
+      mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, three.camera);
+      var hits = raycaster.intersectObject(three.mesh);
+      if (!hits.length) return;
+      onFacePicked(hits[0].faceIndex);
+    });
+    canvas.addEventListener('mousemove', function(ev){
+      if (!three.mesh || meshState.lastResult) return;
+      var rect = canvas.getBoundingClientRect();
+      mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, three.camera);
+      var hits = raycaster.intersectObject(three.mesh);
+      $('meshStageHint').textContent = hits.length ? 'Click to mark this face (' + meshState.pickMode + ')' : '';
+    });
+
+    function loop(){
+      three.controls.update();
+      three.renderer.render(three.scene, three.camera);
+      three.raf = requestAnimationFrame(loop);
+    }
+    loop();
+    new ResizeObserver(onMeshCanvasResize).observe(canvas.parentElement);
+  }
+
+  function onMeshCanvasResize(){
+    if (!three.renderer) return;
+    var canvas = $('meshCanvas');
+    var w = canvas.parentElement.clientWidth, h = canvas.parentElement.clientHeight || 420;
+    three.renderer.setSize(w, h, false);
+    three.camera.aspect = w / h;
+    three.camera.updateProjectionMatrix();
+  }
+
+  function buildMeshGeometry(){
+    var nodes = meshState.nodes, faces = meshState.boundaryFaces;
+    var positions = new Float32Array(faces.length * 9);
+    var colors = new Float32Array(faces.length * 9);
+    meshState.faceNodeIds = faces;
+    for (var f = 0; f < faces.length; f++){
+      for (var v = 0; v < 3; v++){
+        var nid = faces[f][v];
+        var p = nodes[nid];
+        var idx = (f*3+v)*3;
+        positions[idx] = p[0]; positions[idx+1] = p[1]; positions[idx+2] = p[2];
+        colors[idx] = 0.63; colors[idx+1] = 0.66; colors[idx+2] = 0.62;
+      }
+    }
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geom.computeVertexNormals();
+    return geom;
+  }
+
+  function loadMeshIntoViewer(){
+    initThree();
+    if (three.mesh){ three.scene.remove(three.mesh); three.geom.dispose(); three.mesh.material.dispose(); }
+    var geom = buildMeshGeometry();
+    var mat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85, metalness: 0.05 });
+    three.mesh = new THREE.Mesh(geom, mat);
+    three.geom = geom;
+    three.scene.add(three.mesh);
+
+    var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geom, 25), new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.12, transparent: true }));
+    three.mesh.add(edges);
+
+    var bb = meshState.bbox;
+    var cx = (bb.xmin+bb.xmax)/2, cy = (bb.ymin+bb.ymax)/2, cz = (bb.zmin+bb.zmax)/2;
+    var span = Math.max(bb.xmax-bb.xmin, bb.ymax-bb.ymin, bb.zmax-bb.zmin, 1);
+    three.controls.target.set(cx, cy, cz);
+    three.camera.position.set(cx + span*1.1, cy - span*1.3, cz + span*0.9);
+    three.camera.near = span/100; three.camera.far = span*50;
+    three.camera.updateProjectionMatrix();
+    three.controls.update();
+    onMeshCanvasResize();
+  }
+
+  function paintFace(faceIdx, color){
+    var colors = three.geom.attributes.color.array;
+    for (var v = 0; v < 3; v++){
+      var idx = (faceIdx*3+v)*3;
+      colors[idx] = color[0]; colors[idx+1] = color[1]; colors[idx+2] = color[2];
+    }
+    three.geom.attributes.color.needsUpdate = true;
+  }
+
+  var FIXED_COLOR = [0.376, 0.647, 0.980], LOAD_COLOR = [0.976, 0.451, 0.086], NEUTRAL_COLOR = [0.63, 0.66, 0.62];
+
+  function onFacePicked(faceIdx){
+    var nids = meshState.faceNodeIds[faceIdx];
+    var targetSet = meshState.pickMode === 'fixed' ? meshState.fixedIds : meshState.loadedIds;
+    var otherSet = meshState.pickMode === 'fixed' ? meshState.loadedIds : meshState.fixedIds;
+    nids.forEach(function(nid){ targetSet.add(nid); otherSet.delete(nid); });
+    paintFace(faceIdx, meshState.pickMode === 'fixed' ? FIXED_COLOR : LOAD_COLOR);
+    $('nFixedCount').textContent = meshState.fixedIds.size;
+    $('nLoadedCount').textContent = meshState.loadedIds.size;
+  }
+
+  $('btnPickFixed').addEventListener('click', function(){
+    meshState.pickMode = 'fixed';
+    $('btnPickFixed').classList.add('active'); $('btnPickLoad').classList.remove('active');
+  });
+  $('btnPickLoad').addEventListener('click', function(){
+    meshState.pickMode = 'load';
+    $('btnPickLoad').classList.add('active'); $('btnPickFixed').classList.remove('active');
+  });
+  $('clearPickBtn').addEventListener('click', function(){
+    meshState.fixedIds.clear(); meshState.loadedIds.clear();
+    $('nFixedCount').textContent = '0'; $('nLoadedCount').textContent = '0';
+    if (three.geom){
+      var colors = three.geom.attributes.color.array;
+      for (var i = 0; i < colors.length; i += 3){ colors[i]=NEUTRAL_COLOR[0]; colors[i+1]=NEUTRAL_COLOR[1]; colors[i+2]=NEUTRAL_COLOR[2]; }
+      three.geom.attributes.color.needsUpdate = true;
+    }
+  });
+
+  $('meshBtn').addEventListener('click', async function(){
+    var fileInput = $('stlFile'), btn = $('meshBtn'), hint = $('meshHint');
+    if (!fileInput.files.length){ hint.textContent = 'Choose an STL file first.'; return; }
+    btn.classList.add('loading'); btn.disabled = true;
+    hint.textContent = 'Meshing… this can take a few seconds for detailed geometry.';
+    try {
+      var form = new FormData();
+      form.append('file', fileInput.files[0]);
+      var url = apiBase() + '/upload_geometry?mesh_size_max=' + encodeURIComponent($('meshSize').value || '8');
+      var res = await fetch(url, { method: 'POST', body: form });
+      if (!res.ok) throw new Error(await res.text());
+      var data = await res.json();
+      meshState.meshId = data.mesh_id;
+      meshState.nodes = data.nodes;
+      meshState.boundaryFaces = data.boundary_faces;
+      meshState.bbox = data.bbox;
+      meshState.fixedIds = new Set(); meshState.loadedIds = new Set();
+      meshState.lastResult = null;
+
+      $('meshEmptyState').style.display = 'none';
+      $('meshViewerWrap').style.display = 'block';
+      $('pickGroup').style.display = 'block';
+      $('meshMaterialGroup').style.display = 'block';
+      $('meshAnalysisGroup').style.display = 'block';
+      $('runMeshBtn').style.display = 'flex';
+      $('meshResultControls').style.display = 'none';
+      $('meshModechips').style.display = 'none';
+      $('meshColorbar').style.display = 'none';
+      $('meshFrfPanel').style.display = 'none';
+      $('meshModeTablePanel').style.display = 'none';
+      $('meshTiles').innerHTML = '';
+      $('meshViewerTitle').textContent = 'Geometry — click faces to assign boundary conditions';
+      $('nFixedCount').textContent = '0'; $('nLoadedCount').textContent = '0';
+
+      loadMeshIntoViewer();
+      hint.textContent = data.n_nodes + ' nodes, ' + data.n_tets + ' tets. Pick fixed and load faces, then run the analysis.';
+    } catch(e){
+      hint.textContent = 'Meshing failed: ' + (e.message || e);
+    } finally {
+      btn.classList.remove('loading'); btn.disabled = false;
+    }
+  });
+
+  $('btnMeshModes').addEventListener('click', function(){ setMeshAnalysis('modes'); });
+  $('btnMeshStatic').addEventListener('click', function(){ setMeshAnalysis('static'); });
+  $('btnMeshFreq').addEventListener('click', function(){ setMeshAnalysis('freq_response'); });
+  function setMeshAnalysis(mode){
+    meshState.analysisMode = mode;
+    $('btnMeshModes').classList.toggle('active', mode==='modes');
+    $('btnMeshStatic').classList.toggle('active', mode==='static');
+    $('btnMeshFreq').classList.toggle('active', mode==='freq_response');
+    $('meshModesFields').style.display = mode==='modes' ? 'flex' : 'none';
+    $('meshStaticFields').style.display = mode==='static' ? 'block' : 'none';
+    $('meshFreqFields').style.display = mode==='freq_response' ? 'block' : 'none';
+  }
+
+  $('runMeshBtn').addEventListener('click', async function(){
+    var btn = $('runMeshBtn'), errBanner = $('meshErrBanner'), errText = $('meshErrText');
+    errBanner.classList.remove('show');
+    if (meshState.fixedIds.size === 0){ errText.textContent = 'Pick at least one fixed face first.'; errBanner.classList.add('show'); return; }
+    if (meshState.loadedIds.size === 0){ errText.textContent = 'Pick at least one load face first.'; errBanner.classList.add('show'); return; }
+    btn.classList.add('loading'); btn.disabled = true;
+    var mode = meshState.analysisMode;
+    var req = {
+      mesh_id: meshState.meshId,
+      fixed_ids: Array.from(meshState.fixedIds),
+      loaded_ids: Array.from(meshState.loadedIds),
+      material: $('materialMesh').value,
+      analysis: mode,
+      num_modes: parseInt($('numModesMesh').value, 10) || 6,
+      load_n: mode==='freq_response' ? (parseFloat($('freqLoadNMesh').value)||0) : (parseFloat($('loadNMesh').value)||0),
+      load_dir: mode==='freq_response' ? $('freqLoadDirMesh').value : $('loadDirMesh').value,
+      freq_start_hz: parseFloat($('freqStartMesh').value) || 0,
+      freq_end_hz: parseFloat($('freqEndMesh').value) || 500,
+      num_freq_points: parseInt($('freqPointsMesh').value, 10) || 41,
+      damping_g: parseFloat($('dampingGMesh').value)
+    };
+    try {
+      var res = await fetch(apiBase() + '/analyze_mesh', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req)
+      });
+      if (!res.ok) throw new Error((await res.text()).slice(0,300));
+      var data = await res.json();
+      meshState.lastResult = data;
+      renderMeshResults(data);
+    } catch(e){
+      errText.textContent = String(e.message || e);
+      errBanner.classList.add('show');
+    } finally {
+      btn.classList.remove('loading'); btn.disabled = false;
+    }
+  });
+
+  function meshTile(k, v, u){
+    return '<div class="tile"><div class="k">'+k+'</div><div class="v">'+v+(u?' <span class="u">'+u+'</span>':'')+'</div></div>';
+  }
+
+  function renderMeshResults(data){
+    var tiles = [];
+    tiles.push(meshTile('Nodes', Object.keys(meshState.nodes).length, ''));
+    tiles.push(meshTile('Fixed / Load', meshState.fixedIds.size + ' / ' + meshState.loadedIds.size, 'faces'));
+    if (data.analysis === 'modes'){
+      tiles.push(meshTile('Mode 1', data.modes[0] ? data.modes[0].freq_hz.toFixed(1) : '—', 'Hz'));
+    } else if (data.analysis === 'static'){
+      tiles.push(meshTile('Max deflection', data.static.max_deflection_mm.toFixed(4), 'mm'));
+    } else {
+      tiles.push(meshTile('Peak', data.freq_response.peak_magnitude_mm.toFixed(3), 'mm'));
+      tiles.push(meshTile('At frequency', data.freq_response.peak_freq_hz.toFixed(1), 'Hz'));
+    }
+    $('meshTiles').innerHTML = tiles.join('');
+
+    $('meshFrfPanel').style.display = 'none';
+    $('meshModeTablePanel').style.display = 'none';
+    $('meshResultControls').style.display = 'none';
+    $('meshModechips').style.display = 'none';
+    $('meshColorbar').style.display = 'none';
+
+    if (meshState.resultAnimHandle) cancelAnimationFrame(meshState.resultAnimHandle);
+
+    if (data.analysis === 'freq_response'){
+      $('meshViewerPanel').style.display = 'none';
+      $('meshFrfPanel').style.display = 'block';
+      renderFreqResponse(data, 'meshFrfTitle', 'svgMeshFrf');
+      return;
+    }
+    $('meshViewerPanel').style.display = 'block';
+    $('meshResultControls').style.display = 'flex';
+
+    var origPositions = new Float32Array(three.geom.attributes.position.array);
+    var vectorsByFace = meshState.faceNodeIds;
+
+    function vectorsFor(mode){
+      return data.analysis === 'modes' ? mode.vectors : data.static.vectors;
+    }
+
+    if (data.analysis === 'modes'){
+      $('meshModeTablePanel').style.display = 'block';
+      $('meshModechips').style.display = 'flex';
+      var chipsEl = $('meshModechips'); chipsEl.innerHTML = '';
+      meshState.modeIndex = 0;
+      data.modes.forEach(function(m, i){
+        var chip = document.createElement('div');
+        chip.className = 'chip' + (i===0 ? ' active' : '');
+        chip.innerHTML = '<b>Mode ' + m.mode + '</b>' + m.freq_hz.toFixed(1) + ' Hz';
+        chip.addEventListener('click', function(){
+          meshState.modeIndex = i;
+          Array.prototype.forEach.call(chipsEl.children, function(c,j){ c.classList.toggle('active', j===i); });
+        });
+        chipsEl.appendChild(chip);
+      });
+      var tbody = $('meshFreqTableBody');
+      tbody.innerHTML = data.modes.map(function(m){
+        return '<tr' + (m.mode===1?' class="hi"':'') + '><td>Mode ' + m.mode + '</td><td class="num num">' + m.freq_hz.toFixed(2) + ' Hz</td></tr>';
+      }).join('');
+    } else {
+      $('meshColorbar').style.display = 'block';
+      var maxDef = data.static.max_deflection_mm || 1;
+      $('meshColorbar').innerHTML =
+        '<div class="colorbar-strip"></div>' +
+        '<div class="colorbar-labels"><span>0 mm</span><span>' + (maxDef/2).toFixed(3) + ' mm</span><span>' + maxDef.toFixed(3) + ' mm</span></div>';
+    }
+
+    var playBtn = $('meshPlayBtn'), ampSlider = $('meshAmpSlider');
+    meshState.resultPlaying = true; meshState.resultT0 = performance.now();
+    playBtn.innerHTML = '&#10074;&#10074;';
+    playBtn.onclick = function(){
+      meshState.resultPlaying = !meshState.resultPlaying;
+      playBtn.innerHTML = meshState.resultPlaying ? '&#10074;&#10074;' : '&#9654;';
+      if (meshState.resultPlaying) meshState.resultT0 = performance.now();
+    };
+
+    function frame(){
+      var vectors = data.analysis === 'modes' ? data.modes[meshState.modeIndex].vectors : data.static.vectors;
+      var maxMag = data.analysis === 'modes' ? 1 : (data.static.max_deflection_mm || 1);
+      var amp = parseFloat(ampSlider.value);
+      var phase;
+      if (data.analysis === 'modes') phase = meshState.resultPlaying ? Math.sin((performance.now()-meshState.resultT0)/600) : 1;
+      else phase = meshState.resultPlaying ? (1-Math.cos((performance.now()-meshState.resultT0)/900))/2 : 1;
+
+      var positions = three.geom.attributes.position.array;
+      var colors = three.geom.attributes.color.array;
+      for (var f = 0; f < vectorsByFace.length; f++){
+        for (var v = 0; v < 3; v++){
+          var nid = vectorsByFace[f][v];
+          var vec = vectors[nid] || [0,0,0,0,0,0];
+          var idx = (f*3+v)*3;
+          positions[idx]   = origPositions[idx]   + vec[0]*amp*phase;
+          positions[idx+1] = origPositions[idx+1] + vec[1]*amp*phase;
+          positions[idx+2] = origPositions[idx+2] + vec[2]*amp*phase;
+          if (data.analysis === 'static'){
+            var mag = Math.sqrt(vec[0]*vec[0]+vec[1]*vec[1]+vec[2]*vec[2]) * phase;
+            var c = stressColor(mag / maxMag);
+            var rgb = c.match(/\d+/g);
+            colors[idx] = rgb[0]/255; colors[idx+1] = rgb[1]/255; colors[idx+2] = rgb[2]/255;
+          }
+        }
+      }
+      three.geom.attributes.position.needsUpdate = true;
+      if (data.analysis === 'static') three.geom.attributes.color.needsUpdate = true;
+      three.geom.computeVertexNormals();
+      meshState.resultAnimHandle = requestAnimationFrame(frame);
+    }
+    frame();
+  }
+})();
+</script>
