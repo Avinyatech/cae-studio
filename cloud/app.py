@@ -4,6 +4,7 @@ import time
 import traceback
 import uuid
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -15,8 +16,12 @@ from solver_runner import run_job, SolveError
 from tetmesh import mesh_stl_bytes, MeshError
 import assistant
 
-from hpc_solver.mesh import box_mesh, face_node_ids
+from hpc_solver.mesh import box_mesh, face_node_ids, boundary_faces as hpc_boundary_faces
 from hpc_solver.serial import solve_static as hpc_solve_static
+from hpc_solver.assembly import element_stress_strain as hpc_element_stress_strain
+from hpc_solver.modal import modal_analysis as hpc_modal_analysis
+from hpc_solver.freq_response import frequency_response as hpc_frequency_response
+from hpc_solver.fatigue import FATIGUE_PRESETS, life_from_stress as hpc_life_from_stress
 
 MESH_STORE = {}  # mesh_id -> {nodes, tets, boundary_faces, bbox} (in-memory, single-user local tool)
 
@@ -188,6 +193,57 @@ class MeshAnalysisRequest(BaseModel):
     damping_g: float = Field(0.02, ge=0, le=1)
 
 
+@app.post("/analyze_deck")
+async def analyze_deck(file: UploadFile = File(...)):
+    """
+    Power-user path: run a raw NASTRAN-95 bulk-data deck as-is, bypassing
+    the parametric/STL generators entirely -- whatever SOL/elements/case
+    control the file specifies. Pure I/O: no new solver math, just
+    solver_runner + f06_parser reused directly. f06_parser was built
+    against this project's own generated decks (CQUAD4/CTETRA/CTRMEM,
+    standard DISPLACEMENT VECTOR tables), so an arbitrary hand-written or
+    third-party deck using unusual output requests may not parse cleanly
+    even if NASTRAN itself solves it without error -- check "ok" in the
+    response.
+    """
+    if not file.filename.lower().endswith((".bdf", ".dat", ".inp", ".nas", ".txt")):
+        raise HTTPException(400, "expected a NASTRAN bulk data file (.bdf/.dat/.inp/.nas/.txt)")
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(400, "file too large (5MB limit)")
+    try:
+        deck_text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        raise HTTPException(400, "could not decode file as text")
+
+    try:
+        f06_text = run_job(deck_text, job_prefix="deck")
+    except SolveError as e:
+        raise HTTPException(500, "solver failed: %s" % e)
+    except Exception:
+        raise HTTPException(500, "unexpected solver error: %s" % traceback.format_exc())
+
+    result = parse_f06(f06_text)
+    response = dict(filename=file.filename, ok=result["ok"], analysis=result["analysis"], error=result["error"])
+    if result["analysis"] == "modes":
+        response["modes"] = [
+            dict(mode=i + 1, freq_hz=m["freq_hz"], vectors={str(k): v for k, v in m["vectors"].items()})
+            for i, m in enumerate(sorted(result["modes"], key=lambda m: m["freq_hz"]))
+        ]
+    elif result["analysis"] == "static":
+        response["static"] = dict(vectors={str(k): v for k, v in result["static"]["vectors"].items()})
+    elif result["analysis"] == "nonlinear":
+        response["nonlinear"] = dict(steps=[
+            dict(step=s["step"], epsilon=s["epsilon"], vectors={str(k): v for k, v in s["vectors"].items()})
+            for s in result["nonlinear"]["steps"]
+        ])
+    elif result["analysis"] == "freq_response":
+        response["freq_response"] = dict(points_by_node={
+            str(k): v for k, v in result["freq_response"]["points_by_node"].items()
+        })
+    return response
+
+
 @app.post("/upload_geometry")
 async def upload_geometry(file: UploadFile = File(...), mesh_size_max: Optional[float] = None):
     if not file.filename.lower().endswith(".stl"):
@@ -321,6 +377,14 @@ def analyze_mesh(req: MeshAnalysisRequest):
 MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "3000"))
 
 
+# Modal and frequency-response solves are meaningfully more expensive than
+# the static CG path per node (a sparse LU factorization for the eigensolver's
+# shift-invert, or one such factorization PER frequency point for FRF) --
+# kept separately capped, more conservatively, until live-tested the same
+# way MAX_HPC_NODES was bisected against this actual instance.
+MAX_HPC_NODES_ADVANCED = int(os.environ.get("MAX_HPC_NODES_ADVANCED", "800"))
+
+
 class LargeModelRequest(BaseModel):
     nx: int = Field(20, ge=1, le=400)
     ny: int = Field(6, ge=1, le=400)
@@ -330,20 +394,28 @@ class LargeModelRequest(BaseModel):
     height_mm: float = Field(40.0, gt=0)
     material: str = Field("steel")
     material_custom: Optional[dict] = None
+    analysis: Literal["static", "modal", "freq_response"] = "static"
     load_n: float = Field(5000.0)
     load_dir: Literal["x", "y", "z"] = "z"
     tol: float = Field(1e-8, gt=0, le=1e-2)
     max_iter: int = Field(3000, ge=100, le=5000)
+    num_modes: int = Field(6, ge=1, le=20)
+    freq_start_hz: float = Field(50.0, ge=0)
+    freq_end_hz: float = Field(500.0, gt=0)
+    num_freq_points: int = Field(11, ge=2, le=31)
+    damping_g: float = Field(0.02, ge=0, le=1)
+    compute_fatigue: bool = Field(True)
 
 
 @app.post("/analyze_large")
 def analyze_large(req: LargeModelRequest):
     n_nodes = (req.nx + 1) * (req.ny + 1) * (req.nz + 1)
-    if n_nodes > MAX_HPC_NODES:
+    cap = MAX_HPC_NODES if req.analysis == "static" else MAX_HPC_NODES_ADVANCED
+    if n_nodes > cap:
         raise HTTPException(
             400,
-            "%d nodes requested, this free-tier instance is capped at %d "
-            "(MAX_HPC_NODES) to stay within its RAM -- reduce nx/ny/nz." % (n_nodes, MAX_HPC_NODES),
+            "%d nodes requested for %s analysis, this free-tier instance is capped at %d "
+            "-- reduce nx/ny/nz." % (n_nodes, req.analysis, cap),
         )
 
     mat = req.material_custom
@@ -351,6 +423,7 @@ def analyze_large(req: LargeModelRequest):
         mat = MATERIAL_PRESETS.get(req.material)
         if not mat:
             raise HTTPException(400, "unknown material: %s" % req.material)
+    E, nu, rho = float(mat["E"]), float(mat["nu"]), float(mat["rho"])
 
     t0 = time.time()
     nodes, tets = box_mesh(req.nx, req.ny, req.nz, req.length_mm, req.width_mm, req.height_mm)
@@ -359,6 +432,65 @@ def analyze_large(req: LargeModelRequest):
     fixed = face_node_ids(nodes, axis=0, value=0.0)
     loaded = face_node_ids(nodes, axis=0, value=req.length_mm)
     comp_idx = {"x": 0, "y": 1, "z": 2}[req.load_dir]
+
+    mesh_info = dict(
+        nodes=len(nodes), tets=len(tets), ndof=len(nodes) * 3,
+        geometry=dict(length_mm=req.length_mm, width_mm=req.width_mm, height_mm=req.height_mm),
+        node_xyz=nodes.tolist(),
+        boundary_faces=hpc_boundary_faces(tets).tolist(),
+        fixed_ids=[int(i) for i in fixed],
+    )
+
+    if req.analysis == "modal":
+        t0 = time.time()
+        try:
+            modes = hpc_modal_analysis(nodes, tets, E, nu, rho, fixed, num_modes=req.num_modes)
+        except MemoryError:
+            raise HTTPException(507, "ran out of memory solving this mesh -- reduce nx/ny/nz or num_modes")
+        except Exception as e:
+            raise HTTPException(500, "modal solve failed: %s" % e)
+        t_solve = time.time() - t0
+        return dict(
+            analysis="large_modal", mesh=mesh_info, timing=dict(mesh_s=t_mesh, solve_s=t_solve),
+            modes=[dict(mode=i + 1, freq_hz=m["freq_hz"], vectors=m["vectors"].tolist())
+                   for i, m in enumerate(modes)],
+        )
+
+    if req.analysis == "freq_response":
+        per_node = req.load_n / len(loaded)
+        loads = {}
+        for nid in loaded:
+            vec = [0.0, 0.0, 0.0]
+            vec[comp_idx] = per_node
+            loads[int(nid)] = tuple(vec)
+        monitor_id = int(loaded[len(loaded) // 2])
+
+        t0 = time.time()
+        try:
+            points_by_node = hpc_frequency_response(
+                nodes, tets, E, nu, rho, fixed, loads,
+                req.freq_start_hz, req.freq_end_hz, req.num_freq_points, req.damping_g, [monitor_id],
+            )
+        except MemoryError:
+            raise HTTPException(507, "ran out of memory solving this mesh -- reduce nx/ny/nz or num_freq_points")
+        except Exception as e:
+            raise HTTPException(500, "frequency response solve failed: %s" % e)
+        t_solve = time.time() - t0
+
+        pts = sorted(points_by_node[monitor_id], key=lambda p: p["freq_hz"])
+        points = [dict(freq_hz=p["freq_hz"], magnitude_mm=p["mag"][comp_idx], phase_deg=p["phase"][comp_idx])
+                  for p in pts]
+        resp = dict(
+            analysis="large_freq_response", mesh=mesh_info, timing=dict(mesh_s=t_mesh, solve_s=t_solve),
+            freq_response=dict(monitor_node=monitor_id, component=req.load_dir, points=points),
+        )
+        if points:
+            peak = max(points, key=lambda p: p["magnitude_mm"])
+            resp["freq_response"]["peak_freq_hz"] = peak["freq_hz"]
+            resp["freq_response"]["peak_magnitude_mm"] = peak["magnitude_mm"]
+        return resp
+
+    # static (default)
     per_node = req.load_n / len(loaded)
     loads = {}
     for nid in loaded:
@@ -368,35 +500,34 @@ def analyze_large(req: LargeModelRequest):
 
     t0 = time.time()
     try:
-        u, info = hpc_solve_static(nodes, tets, mat["E"], mat["nu"], fixed, loads,
-                                    method="cg", tol=req.tol, maxiter=req.max_iter)
+        u, info = hpc_solve_static(nodes, tets, E, nu, fixed, loads, method="cg", tol=req.tol, maxiter=req.max_iter)
     except MemoryError:
         raise HTTPException(507, "ran out of memory solving this mesh -- reduce nx/ny/nz")
     t_solve = time.time() - t0
 
     tip_disp = u[loaded, comp_idx]
-    max_disp = float(abs(u).max())
+    max_disp = float(np.abs(u).max())
+    fields = dict(node_disp=u.tolist())
 
-    # full per-node vectors would be huge (and pointless) to ship back at
-    # this scale -- return a decimated sample for a lightweight preview,
-    # plus the numeric summary that's the actual point of this path.
-    stride = max(1, len(nodes) // 4000)
-    sample_idx = list(range(0, len(nodes), stride))
-    sample_set = set(sample_idx)
-    sample_fixed = [int(i) for i in fixed if i in sample_set]
+    fatigue_summary = None
+    if req.compute_fatigue:
+        ss = hpc_element_stress_strain(nodes, tets, u, E, nu)
+        fat = FATIGUE_PRESETS.get(req.material, FATIGUE_PRESETS["steel"])
+        life = hpc_life_from_stress(ss["von_mises"], fat["sigma_f_prime"], fat["b"])
+        fields["element_von_mises_mpa"] = ss["von_mises"].tolist()
+        fields["element_max_principal_mpa"] = ss["max_principal"].tolist()
+        fields["element_max_strain"] = np.abs(ss["strain"]).max(axis=1).tolist()
+        fields["element_life_cycles"] = life.tolist()
+        fatigue_summary = dict(
+            min_life_cycles=float(life.min()), max_von_mises_mpa=float(ss["von_mises"].max()),
+            material_sigma_f_prime_mpa=fat["sigma_f_prime"], material_b=fat["b"],
+        )
+
     return dict(
-        analysis="large_static",
-        nodes=len(nodes), tets=len(tets), ndof=len(nodes) * 3,
+        analysis="large_static", mesh=mesh_info, timing=dict(mesh_s=t_mesh, solve_s=t_solve),
         converged=(info == 0), cg_info=int(info),
-        timing=dict(mesh_s=t_mesh, solve_s=t_solve),
-        tip_deflection_mm=float(tip_disp.mean()),
-        max_deflection_mm=max_disp,
-        geometry=dict(length_mm=req.length_mm, width_mm=req.width_mm, height_mm=req.height_mm),
-        sample=dict(
-            node_xyz=[nodes[i].tolist() for i in sample_idx],
-            node_disp=[u[i].tolist() for i in sample_idx],
-            fixed_ids=sample_fixed,
-        ),
+        tip_deflection_mm=float(tip_disp.mean()), max_deflection_mm=max_disp,
+        fields=fields, fatigue=fatigue_summary,
     )
 
 

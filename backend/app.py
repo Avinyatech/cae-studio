@@ -191,6 +191,57 @@ class MeshAnalysisRequest(BaseModel):
     damping_g: float = Field(0.02, ge=0, le=1)
 
 
+@app.post("/analyze_deck")
+async def analyze_deck(file: UploadFile = File(...)):
+    """
+    Power-user path: run a raw NASTRAN-95 bulk-data deck as-is, bypassing
+    the parametric/STL generators entirely -- whatever SOL/elements/case
+    control the file specifies. Pure I/O: no new solver math, just
+    solver_runner + f06_parser reused directly. f06_parser was built
+    against this project's own generated decks (CQUAD4/CTETRA/CTRMEM,
+    standard DISPLACEMENT VECTOR tables), so an arbitrary hand-written or
+    third-party deck using unusual output requests may not parse cleanly
+    even if NASTRAN itself solves it without error -- check "ok" in the
+    response.
+    """
+    if not file.filename.lower().endswith((".bdf", ".dat", ".inp", ".nas", ".txt")):
+        raise HTTPException(400, "expected a NASTRAN bulk data file (.bdf/.dat/.inp/.nas/.txt)")
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(400, "file too large (5MB limit)")
+    try:
+        deck_text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        raise HTTPException(400, "could not decode file as text")
+
+    try:
+        f06_text = run_job(deck_text, job_prefix="deck")
+    except SolveError as e:
+        raise HTTPException(500, "solver failed: %s" % e)
+    except Exception:
+        raise HTTPException(500, "unexpected solver error: %s" % traceback.format_exc())
+
+    result = parse_f06(f06_text)
+    response = dict(filename=file.filename, ok=result["ok"], analysis=result["analysis"], error=result["error"])
+    if result["analysis"] == "modes":
+        response["modes"] = [
+            dict(mode=i + 1, freq_hz=m["freq_hz"], vectors={str(k): v for k, v in m["vectors"].items()})
+            for i, m in enumerate(sorted(result["modes"], key=lambda m: m["freq_hz"]))
+        ]
+    elif result["analysis"] == "static":
+        response["static"] = dict(vectors={str(k): v for k, v in result["static"]["vectors"].items()})
+    elif result["analysis"] == "nonlinear":
+        response["nonlinear"] = dict(steps=[
+            dict(step=s["step"], epsilon=s["epsilon"], vectors={str(k): v for k, v in s["vectors"].items()})
+            for s in result["nonlinear"]["steps"]
+        ])
+    elif result["analysis"] == "freq_response":
+        response["freq_response"] = dict(points_by_node={
+            str(k): v for k, v in result["freq_response"]["points_by_node"].items()
+        })
+    return response
+
+
 @app.post("/upload_geometry")
 async def upload_geometry(file: UploadFile = File(...), mesh_size_max: Optional[float] = None):
     if not file.filename.lower().endswith(".stl"):

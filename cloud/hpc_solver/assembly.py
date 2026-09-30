@@ -118,3 +118,82 @@ def assemble_global(nodes, tets, E, nu):
     ndof = nodes.shape[0] * 3
     K = sp.coo_matrix((vals, (rows, cols)), shape=(ndof, ndof)).tocsr()
     return K
+
+
+def lumped_mass_diag(nodes, tets, rho):
+    """
+    Global lumped mass vector (length 3N, same value repeated for a node's
+    x/y/z DOFs -- pure translational mass, no rotary inertia, matching how
+    NASTRAN-95 treats CTETRA). Each element's mass (rho * volume) is split
+    equally across its 4 nodes: standard row-sum lumping for a simplex
+    element, and what keeps the generalized eigenproblem's mass matrix
+    diagonal (cheap to invert/shift for the eigensolver).
+    """
+    coords = nodes[tets]
+    M = np.ones((tets.shape[0], 4, 4))
+    M[:, :, 1:] = coords
+    vol = np.abs(np.linalg.det(M)) / 6.0
+    node_mass = rho * vol / 4.0
+
+    ndof = nodes.shape[0] * 3
+    mass = np.zeros(ndof)
+    for i in range(4):
+        gid = tets[:, i]
+        np.add.at(mass, 3 * gid, node_mass)
+        np.add.at(mass, 3 * gid + 1, node_mass)
+        np.add.at(mass, 3 * gid + 2, node_mass)
+    return mass
+
+
+def element_stress_strain(nodes, tets, u, E, nu):
+    """
+    Per-element (constant, since CST) stress and strain, recovered from a
+    displacement solution: strain = B @ u_element, stress = D @ strain.
+    Returns dict with strain (M,6), stress (M,6) in Voigt order
+    (xx,yy,zz,xy,yz,zx), von_mises (M,), and max_principal (M,).
+    """
+    coords = nodes[tets]
+    Mm = np.ones((tets.shape[0], 4, 4))
+    Mm[:, :, 1:] = coords
+    Minv = np.linalg.inv(Mm)
+    grads = Minv[:, 1:, :].transpose(0, 2, 1)
+
+    Bs = np.zeros((tets.shape[0], 6, 12))
+    for i in range(4):
+        c = 3 * i
+        bi, ci, di = grads[:, i, 0], grads[:, i, 1], grads[:, i, 2]
+        Bs[:, 0, c + 0] = bi
+        Bs[:, 1, c + 1] = ci
+        Bs[:, 2, c + 2] = di
+        Bs[:, 3, c + 0] = ci
+        Bs[:, 3, c + 1] = bi
+        Bs[:, 4, c + 1] = di
+        Bs[:, 4, c + 2] = ci
+        Bs[:, 5, c + 0] = di
+        Bs[:, 5, c + 2] = bi
+
+    u_elem = np.empty((tets.shape[0], 12))
+    for i in range(4):
+        gid = tets[:, i]
+        u_elem[:, 3 * i:3 * i + 3] = u.reshape(-1, 3)[gid]
+
+    strain = np.einsum('mij,mj->mi', Bs, u_elem)  # (M,6)
+    D = elasticity_matrix(E, nu)
+    stress = strain @ D.T  # (M,6)
+
+    sx, sy, sz, txy, tyz, tzx = [stress[:, i] for i in range(6)]
+    von_mises = np.sqrt(0.5 * ((sx - sy) ** 2 + (sy - sz) ** 2 + (sz - sx) ** 2
+                                + 6 * (txy ** 2 + tyz ** 2 + tzx ** 2)))
+
+    # max principal stress per element via eigenvalues of the 3x3 stress
+    # tensor -- exact for a constant-stress element, and what fatigue
+    # life calculations conventionally use rather than von Mises.
+    tensor = np.zeros((tets.shape[0], 3, 3))
+    tensor[:, 0, 0], tensor[:, 1, 1], tensor[:, 2, 2] = sx, sy, sz
+    tensor[:, 0, 1] = tensor[:, 1, 0] = txy
+    tensor[:, 1, 2] = tensor[:, 2, 1] = tyz
+    tensor[:, 0, 2] = tensor[:, 2, 0] = tzx
+    principal = np.linalg.eigvalsh(tensor)  # (M,3), ascending
+    max_principal = principal[:, -1]
+
+    return dict(strain=strain, stress=stress, von_mises=von_mises, max_principal=max_principal)

@@ -61,3 +61,27 @@ def box_mesh(nx, ny, nz, Lx, Ly, Lz):
 def face_node_ids(nodes, axis, value, tol=1e-9):
     """Node row indices whose `axis` (0=x,1=y,2=z) coordinate is ~= value."""
     return np.nonzero(np.abs(nodes[:, axis] - value) < tol)[0]
+
+
+def boundary_faces(tets):
+    """
+    The outer surface of a tet mesh: each tet has 4 triangular faces: a
+    face shared by two tets is interior (appears twice across the whole
+    mesh) and gets dropped; a face belonging to only one tet is on the
+    boundary. This is what a contour viewer should render -- drawing
+    every element's faces (including interior ones) would just paint an
+    opaque block, since interior faces are never visible from outside.
+
+    Returns (M,3) int array of node-row indices, winding order not
+    guaranteed consistent (fine for an isometric wireframe/fill viewer
+    that doesn't depend on backface culling).
+    """
+    local_faces = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
+    all_faces = np.empty((tets.shape[0] * 4, 3), dtype=tets.dtype)
+    for i, (a, b, c) in enumerate(local_faces):
+        all_faces[i::4] = tets[:, [a, b, c]]
+
+    sorted_faces = np.sort(all_faces, axis=1)
+    _, inverse, counts = np.unique(sorted_faces, axis=0, return_inverse=True, return_counts=True)
+    is_boundary = counts[inverse] == 1
+    return all_faces[is_boundary]
