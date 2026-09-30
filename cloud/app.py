@@ -315,7 +315,7 @@ def analyze_mesh(req: MeshAnalysisRequest):
 # explained by CG iteration count alone, pointing to this instance running
 # out of RAM and thrashing rather than failing cleanly. Raise this only
 # after confirming headroom directly against the deployed instance.
-MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "2000"))
+MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "6000"))
 
 
 class LargeModelRequest(BaseModel):
