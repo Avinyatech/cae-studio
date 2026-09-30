@@ -25,9 +25,16 @@ by clicking faces in an interactive 3D viewer.
 For models too big for NASTRAN-95's compiled binary to hold at all (its
 in-core working memory is a fixed-size array set at compile time — see
 [Hard-won lessons](#hard-won-lessons) #11), the cloud deployment adds a
-from-scratch sparse/iterative solver with genuine MPI-based distributed
-domain decomposition — see `cloud/README.md`'s
-[Large-model solver](cloud/README.md#large-model-solver) section.
+from-scratch sparse/iterative solver — static, modal, and frequency
+response, with per-element stress/strain, a fatigue-life contour, and
+genuine MPI-based distributed domain decomposition — see
+`cloud/README.md`'s [Large-model solver](cloud/README.md#large-model-solver)
+section.
+
+Power users can also upload a raw NASTRAN bulk-data file (`.bdf`/`.dat`/
+`.inp`) and run it as-is via `POST /analyze_deck`, bypassing the
+parametric/STL generators entirely — works on both the local backend and
+the cloud deployment.
 
 ## Why this exists
 

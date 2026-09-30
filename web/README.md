@@ -31,12 +31,20 @@ mixed-content exception, but not an arbitrary LAN address.
 - **Local LLM assistant panel**: describe a structure in plain English to
   fill the form, or get a grounded explanation when a solve fails.
 - **Large model (HPC) workflow**: a parametric solid-box mesh solved by
-  the cloud deployment's from-scratch sparse/CG solver
-  (`cloud/hpc_solver/`), not the local NASTRAN backend — it has its own
-  endpoint field (defaults to the live cloud deployment) since this
-  solver only runs there. A decimated point-cloud viewer shows the
-  deformed shape; full per-node results aren't practical to ship back
-  over JSON at this scale.
+  the cloud deployment's from-scratch solver (`cloud/hpc_solver/`), not
+  the local NASTRAN backend — it has its own endpoint field (defaults to
+  the live cloud deployment) since this solver only runs there. Three
+  analysis types (static/modal/frequency response, each with its own,
+  very differently-sized node cap — see `cloud/README.md`). Static
+  results render as a real contour viewer over the tet mesh's boundary
+  surface (deformation, von Mises stress, strain, fatigue life, toggled
+  live); modal renders animated mode shapes; frequency response reuses
+  the parametric workflow's own FRF chart.
+- **Upload deck workflow**: upload a raw NASTRAN `.bdf`/`.dat`/`.inp`
+  file and run it as-is via `/analyze_deck`, against either backend —
+  results show as a plain table (mode/static/nonlinear/freq_response,
+  whichever the deck produced), since there's no known mesh geometry to
+  visualize for an arbitrary uploaded deck.
 
 No external dependencies beyond Google Fonts and the Three.js/OrbitControls
 CDN scripts — everything else is inline.
