@@ -308,14 +308,17 @@ def analyze_mesh(req: MeshAnalysisRequest):
 # ready for whenever this runs on an actual multi-node cluster, not
 # something this deployment exercises.
 #
-# MAX_HPC_NODES is deliberately conservative, set from live testing against
-# this actual free-tier instance, not a theoretical estimate: 1,701 nodes
-# solved in 1.2s, but 5,239 nodes hung past 90s without responding (and the
-# container needed a restart afterward) -- a jump far too large to be
-# explained by CG iteration count alone, pointing to this instance running
-# out of RAM and thrashing rather than failing cleanly. Raise this only
-# after confirming headroom directly against the deployed instance.
-MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "6000"))
+# MAX_HPC_NODES is set from live bisection against this actual free-tier
+# instance, not a theoretical estimate. Confirmed working: 2,744 nodes
+# (3.4s), 3,375 nodes (3.8s). Confirmed hanging (60s+, no response, no
+# clean error) at 3,840 and 4,096 nodes -- a cliff this sharp (not a
+# graceful slowdown) points to this instance running out of RAM and
+# thrashing rather than failing cleanly, right around 3,400-3,800 nodes.
+# 3,000 keeps real margin below the highest confirmed-good point. Raise
+# this only after confirming headroom directly against the deployed
+# instance -- do not extrapolate from local testing, this ceiling is
+# specific to this free-tier container's actual RAM.
+MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "3000"))
 
 
 class LargeModelRequest(BaseModel):
