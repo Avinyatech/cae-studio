@@ -377,12 +377,19 @@ def analyze_mesh(req: MeshAnalysisRequest):
 MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "3000"))
 
 
-# Modal and frequency-response solves are meaningfully more expensive than
-# the static CG path per node (a sparse LU factorization for the eigensolver's
-# shift-invert, or one such factorization PER frequency point for FRF) --
-# kept separately capped, more conservatively, until live-tested the same
-# way MAX_HPC_NODES was bisected against this actual instance.
-MAX_HPC_NODES_ADVANCED = int(os.environ.get("MAX_HPC_NODES_ADVANCED", "800"))
+# Modal is ONE sparse factorization (shift-invert) regardless of how many
+# modes are requested -- live-tested at 735 nodes in 0.51s, so it keeps a
+# cap similar in spirit to static's, just not yet bisected as tightly.
+MAX_HPC_NODES_MODAL = int(os.environ.get("MAX_HPC_NODES_MODAL", "800"))
+
+# Frequency response does ONE factorization-equivalent solve PER frequency
+# point, so cost multiplies with num_freq_points on top of node count --
+# a fundamentally different cost profile from modal, and it needs its own,
+# much lower cap. Bisected live against this instance: 250 nodes / 11
+# points solved in 12.4s, but 396 nodes / 11 points hung 60s+ with no
+# response -- do not reuse MAX_HPC_NODES_MODAL's value here, they were
+# wrongly sharing one cap before this was tested and FRF hung the service.
+MAX_HPC_NODES_FRF = int(os.environ.get("MAX_HPC_NODES_FRF", "250"))
 
 
 class LargeModelRequest(BaseModel):
@@ -402,7 +409,7 @@ class LargeModelRequest(BaseModel):
     num_modes: int = Field(6, ge=1, le=20)
     freq_start_hz: float = Field(50.0, ge=0)
     freq_end_hz: float = Field(500.0, gt=0)
-    num_freq_points: int = Field(11, ge=2, le=31)
+    num_freq_points: int = Field(9, ge=2, le=15)
     damping_g: float = Field(0.02, ge=0, le=1)
     compute_fatigue: bool = Field(True)
 
@@ -410,7 +417,7 @@ class LargeModelRequest(BaseModel):
 @app.post("/analyze_large")
 def analyze_large(req: LargeModelRequest):
     n_nodes = (req.nx + 1) * (req.ny + 1) * (req.nz + 1)
-    cap = MAX_HPC_NODES if req.analysis == "static" else MAX_HPC_NODES_ADVANCED
+    cap = {"static": MAX_HPC_NODES, "modal": MAX_HPC_NODES_MODAL, "freq_response": MAX_HPC_NODES_FRF}[req.analysis]
     if n_nodes > cap:
         raise HTTPException(
             400,
