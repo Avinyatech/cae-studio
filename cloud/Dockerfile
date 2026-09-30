@@ -21,8 +21,12 @@ COPY --from=builder /n/NASINFO /n/NASINFO
 
 # gmsh's Linux wheel dynamically links against these even for headless
 # (no-GUI) use -- omitting them fails at `import gmsh`, not at call time.
+# libgomp1 (GNU OpenMP runtime) is the same story for scipy/numpy's
+# OpenBLAS-linked wheels -- python:3.11-slim doesn't ship it, and without
+# it `import scipy` fails at container startup with "OSError: libgomp.so.1:
+# cannot open shared object file", crash-looping the whole service.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1 \
+    libgl1 libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
