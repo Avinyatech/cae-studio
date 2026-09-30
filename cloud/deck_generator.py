@@ -141,6 +141,12 @@ def _build_nonlinear_deck(spec, L, W, t, nx, ny, bc, E, nu, rho, nodes, elements
     lines.append("CEND\n")
     lines.append("TITLE    = %s\n" % title[:72])
     lines.append("SPC   = 10\n")
+    # Bulk-data echo + big result tables (ELSTRESS=ALL, DISP=ALL) hit this
+    # build's default MAXLINES=20000 output cap on meshes well below the
+    # solver's actual working-memory ceiling -- raise it and drop the echo
+    # so we're bounded by real solver capacity, not an unrelated line count.
+    lines.append("ECHO   = NONE\n")
+    lines.append("MAXLINES = 10000000\n")
     lines.append("LOAD  = 20\n")
     lines.append("PLCOEFFICIENT = 30\n")
     lines.append("DISP  = ALL\n")
@@ -325,6 +331,12 @@ def build_deck(spec):
     lines.append("CEND\n")
     lines.append("TITLE    = %s\n" % title[:72])
     lines.append("SPC   = 10\n")
+    # Bulk-data echo + big result tables (ELSTRESS=ALL, DISP=ALL) hit this
+    # build's default MAXLINES=20000 output cap on meshes well below the
+    # solver's actual working-memory ceiling -- raise it and drop the echo
+    # so we're bounded by real solver capacity, not an unrelated line count.
+    lines.append("ECHO   = NONE\n")
+    lines.append("MAXLINES = 10000000\n")
 
     if analysis == "modes":
         lines.append("DISP  = ALL\n")
@@ -494,6 +506,12 @@ def build_deck_from_tetmesh(spec):
     lines.append("CEND\n")
     lines.append("TITLE    = UPLOADED GEOMETRY, %d TETS, %d NODES\n" % (len(tets), len(nodes)))
     lines.append("SPC   = 10\n")
+    # Bulk-data echo + big result tables (ELSTRESS=ALL, DISP=ALL) hit this
+    # build's default MAXLINES=20000 output cap on meshes well below the
+    # solver's actual working-memory ceiling -- raise it and drop the echo
+    # so we're bounded by real solver capacity, not an unrelated line count.
+    lines.append("ECHO   = NONE\n")
+    lines.append("MAXLINES = 10000000\n")
 
     if analysis == "modes":
         lines.append("DISP  = ALL\n")

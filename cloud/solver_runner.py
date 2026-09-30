@@ -29,7 +29,14 @@ class SolveError(Exception):
     pass
 
 
-def run_job(deck_text, job_prefix="job"):
+def run_job(deck_text, job_prefix="job", timeout=120, dbmem=12000000, ocmem=2000000):
+    """
+    dbmem/ocmem are NASTRAN's in-core working-set sizes (words), carved out
+    of this build's fixed COMMON/ZZZZZZ/IZ(14000000) array -- 14,000,000
+    words total is a hard, compile-time ceiling (see src/nastrn.f) that no
+    env var can exceed. timeout/dbmem/ocmem exist as overrides for scale
+    testing (see bench_scale.py), not for routine use.
+    """
     job_dir = "/tmp/j" + uuid.uuid4().hex[:8]
     os.makedirs(job_dir, exist_ok=True)
     inp_path = os.path.join(job_dir, "in.inp")
@@ -43,18 +50,18 @@ def run_job(deck_text, job_prefix="job"):
     env["RFDIR"] = RFDIR
     for name, fname in FTN_FILES:
         env[name] = os.path.join(job_dir, fname)
-    env["DBMEM"] = "12000000"
-    env["OCMEM"] = "2000000"
+    env["DBMEM"] = str(dbmem)
+    env["OCMEM"] = str(ocmem)
 
     try:
         with open(inp_path) as inf, open(f06_path, "w") as outf:
             proc = subprocess.run(
                 [NASTRAN_BIN], stdin=inf, stdout=outf, stderr=subprocess.PIPE,
-                env=env, cwd=job_dir, timeout=120, text=True,
+                env=env, cwd=job_dir, timeout=timeout, text=True,
             )
     except subprocess.TimeoutExpired:
         shutil.rmtree(job_dir, ignore_errors=True)
-        raise SolveError("solver timed out after 120s")
+        raise SolveError("solver timed out after %ds" % timeout)
 
     if not os.path.exists(f06_path):
         stderr = proc.stderr if proc else ""

@@ -38,8 +38,8 @@ export FTN22=OUTPUT/{job}.f22
 export FTN23=OUTPUT/{job}.f23
 export SOF1=OUTPUT/{job}.sof1
 export SOF2=OUTPUT/{job}.sof2
-export DBMEM=12000000
-export OCMEM=2000000
+export DBMEM={dbmem}
+export OCMEM={ocmem}
 {nroot}/bin/nastran.x < {nroot}/inp/{job}.inp > OUTPUT/{job}.f06 2>OUTPUT/{job}.stderr
 echo "EXITCODE:$?"
 """
@@ -54,12 +54,17 @@ def _win_path(nroot_relpath):
     return "N:\\" + nroot_relpath.replace("/", "\\")
 
 
-def run_job(deck_text, job_prefix="job"):
+def run_job(deck_text, job_prefix="job", timeout=120, dbmem=12000000, ocmem=2000000):
     """
     Writes deck_text to N:/inp/<job>.inp, runs nastran.x, returns the .f06
     text. Raises SolveError on subprocess failure (the caller should still
     check the parsed result's ok/error, since NASTRAN itself reports
     modeling FATAL errors inside a .f06 that exits 0).
+
+    dbmem/ocmem are NASTRAN's in-core working-set sizes (words) -- the
+    defaults are small, tuned for the demo-scale decks this project has
+    validated against. timeout/dbmem/ocmem exist as overrides for scale
+    testing (see nastran-backend/bench_scale.py), not for routine use.
     """
     job = "%s_%s" % (job_prefix, uuid.uuid4().hex[:8])
     inp_path = _win_path("inp/%s.inp" % job)
@@ -69,7 +74,7 @@ def run_job(deck_text, job_prefix="job"):
     with open(inp_path, "w", newline="\n") as f:
         f.write(deck_text)
 
-    script = RUN_SCRIPT.format(nroot=NROOT, job=job, jobtmp=job)
+    script = RUN_SCRIPT.format(nroot=NROOT, job=job, jobtmp=job, dbmem=dbmem, ocmem=ocmem)
     script_win_path = _win_path("run_%s.sh" % job)
     with open(script_win_path, "w", newline="\n") as f:
         f.write(script)
@@ -78,7 +83,7 @@ def run_job(deck_text, job_prefix="job"):
     env["MSYSTEM"] = "MINGW64"
     proc = subprocess.run(
         [BASH, "-lc", "sh %s/run_%s.sh" % (NROOT, job)],
-        env=env, capture_output=True, text=True, timeout=120,
+        env=env, capture_output=True, text=True, timeout=timeout,
     )
 
     try:
