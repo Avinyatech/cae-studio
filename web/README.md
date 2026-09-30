@@ -1,8 +1,9 @@
 # Web
 
 A single-file web app (`index.html` — no build step) for the design
-studio: parametric shell analysis and uploaded-geometry (STL → tet mesh)
-workflows, both with interactive 3D viewers.
+studio: parametric shell analysis, uploaded-geometry (STL → tet mesh)
+workflows, and a large-model sparse/iterative solver, all with
+interactive viewers.
 
 ## Running it
 
@@ -29,6 +30,13 @@ mixed-content exception, but not an arbitrary LAN address.
   three analysis types solved on the actual mesh.
 - **Local LLM assistant panel**: describe a structure in plain English to
   fill the form, or get a grounded explanation when a solve fails.
+- **Large model (HPC) workflow**: a parametric solid-box mesh solved by
+  the cloud deployment's from-scratch sparse/CG solver
+  (`cloud/hpc_solver/`), not the local NASTRAN backend — it has its own
+  endpoint field (defaults to the live cloud deployment) since this
+  solver only runs there. A decimated point-cloud viewer shows the
+  deformed shape; full per-node results aren't practical to ship back
+  over JSON at this scale.
 
 No external dependencies beyond Google Fonts and the Three.js/OrbitControls
 CDN scripts — everything else is inline.

@@ -257,6 +257,7 @@
       <div class="segmented">
         <button id="btnSrcParam" class="active">Parametric</button>
         <button id="btnSrcUpload">Upload STL</button>
+        <button id="btnSrcHpc">Large model (HPC)</button>
       </div>
     </div>
 
@@ -428,6 +429,55 @@
         <div id="meshErrText"></div>
       </div>
     </div>
+
+    <div id="hpcRail" style="display:none;">
+      <div class="group">
+        <div class="group-label">Cloud HPC endpoint</div>
+        <input id="hpcApiBase" value="https://cae-studio.onrender.com" spellcheck="false"
+               style="width:100%; background:var(--surface-2); border:1px solid var(--border); border-radius:7px; padding:7px 9px; font-size:11.5px; color:var(--text); font-family:var(--font-mono);">
+        <div class="hint">This solver only runs on the cloud deployment, not a local NASTRAN backend -- a from-scratch sparse/iterative solver (CST tetrahedra + Jacobi-preconditioned CG) built to get past NASTRAN-95's fixed 14,000,000-word working-memory ceiling.</div>
+      </div>
+
+      <div class="group">
+        <div class="group-label">Geometry &mdash; solid box</div>
+        <div class="field"><label for="hpcLength">Length</label><input type="number" id="hpcLength" value="150" min="1"><span class="unit">mm</span></div>
+        <div class="field"><label for="hpcWidth">Width</label><input type="number" id="hpcWidth" value="30" min="1"><span class="unit">mm</span></div>
+        <div class="field"><label for="hpcHeight">Height</label><input type="number" id="hpcHeight" value="30" min="1"><span class="unit">mm</span></div>
+        <div class="field"><label for="hpcNx">Mesh, length</label><input type="number" id="hpcNx" value="14" min="1" max="60"><span class="unit">elems</span></div>
+        <div class="field"><label for="hpcNy">Mesh, width</label><input type="number" id="hpcNy" value="6" min="1" max="40"><span class="unit">elems</span></div>
+        <div class="field"><label for="hpcNz">Mesh, height</label><input type="number" id="hpcNz" value="6" min="1" max="40"><span class="unit">elems</span></div>
+        <div class="hint" id="hpcNodeCountHint"></div>
+      </div>
+
+      <div class="group">
+        <div class="group-label">Material</div>
+        <div class="field stack">
+          <select id="hpcMaterial">
+            <option value="steel" selected>Steel — E 210 GPa</option>
+            <option value="aluminum">Aluminum — E 69 GPa</option>
+            <option value="titanium">Titanium — E 114 GPa</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-label">Cantilever load</div>
+        <div class="field"><label for="hpcLoadN">Tip load</label><input type="number" id="hpcLoadN" value="5000" min="0"><span class="unit">N</span></div>
+        <div class="field stack" style="margin-top:8px;">
+          <select id="hpcLoadDir">
+            <option value="z" selected>Z — transverse bending</option>
+            <option value="y">Y — in-plane, across width</option>
+            <option value="x">X — in-plane, along length</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="run-btn" id="runHpcBtn"><span class="spin"></span><span class="label">Run analysis</span></button>
+      <div class="banner err" id="hpcErrBanner">
+        <div id="hpcErrText"></div>
+      </div>
+      <div class="hint">Fixed one end (length=0 face), point load distributed over the opposite face. Solid tetrahedral mesh, one static subcase, Jacobi-preconditioned conjugate gradient.</div>
+    </div>
   </aside>
 
   <main class="main">
@@ -474,6 +524,36 @@
             <tbody id="meshFreqTableBody"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <div id="hpcMain" style="display:none;">
+      <div class="empty" id="hpcEmptyState">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="14" width="14" height="14" stroke="currentColor" stroke-width="1.6"/><rect x="22" y="8" width="14" height="14" stroke="currentColor" stroke-width="1.6"/><rect x="22" y="26" width="14" height="8" stroke="currentColor" stroke-width="1.6"/><line x1="18" y1="21" x2="22" y2="15" stroke="currentColor" stroke-width="1.6"/><line x1="18" y1="21" x2="22" y2="29" stroke="currentColor" stroke-width="1.6"/></svg>
+        <div style="font-size:14px; font-weight:600; color:var(--text-dim);">Set parameters, then run the large-model analysis</div>
+        <div style="font-size:12.5px; max-width:340px;">Runs on the cloud deployment's sparse/iterative solver, not a local NASTRAN backend -- capped at a few thousand nodes on the current free-tier instance.</div>
+      </div>
+
+      <div id="hpcResults" style="display:none;">
+        <div class="tiles" id="hpcTiles"></div>
+
+        <div class="panel" id="hpcShapePanel">
+          <h2>Deformed shape (sampled nodes)</h2>
+          <div class="stage">
+            <div class="stage-hint" id="hpcStageHint"></div>
+            <svg id="svgHpc" viewBox="0 0 640 360"></svg>
+          </div>
+          <div class="viewer-controls">
+            <label style="display:flex; align-items:center; gap:8px; flex:1;">Amplitude<input type="range" id="ampSliderHpc" min="1" max="60" value="20"></label>
+          </div>
+          <div class="legend">
+            <span><span class="sw" style="background:var(--text);"></span>Fixed</span>
+            <span><span class="sw" style="background:var(--deform);"></span>Free (deformed)</span>
+          </div>
+          <div class="hint" style="margin-top:8px;">A decimated sample of nodes, not the full mesh or element faces -- full per-node results at this scale aren't practical to ship back over JSON.</div>
+        </div>
+
+        <div class="footer-note" id="hpcDeckMeta"></div>
       </div>
     </div>
 
@@ -1171,6 +1251,101 @@
     draw();
   }
 
+  // ==================== Large-model (cloud HPC) solver ====================
+  function hpcApiBase(){ return $('hpcApiBase').value.replace(/\/+$/,''); }
+
+  function updateHpcNodeCountHint(){
+    var nx = parseInt($('hpcNx').value,10)||1, ny = parseInt($('hpcNy').value,10)||1, nz = parseInt($('hpcNz').value,10)||1;
+    var n = (nx+1)*(ny+1)*(nz+1);
+    $('hpcNodeCountHint').textContent = n.toLocaleString() + ' nodes (this mesh density)';
+  }
+  ['hpcNx','hpcNy','hpcNz'].forEach(function(id){ $(id).addEventListener('input', updateHpcNodeCountHint); });
+
+  function hpcShowError(msg){
+    $('hpcErrText').innerHTML = msg;
+    $('hpcErrBanner').classList.add('show');
+  }
+  function hpcClearError(){
+    $('hpcErrBanner').classList.remove('show');
+    $('hpcErrText').textContent = '';
+  }
+
+  $('runHpcBtn').addEventListener('click', async function(){
+    hpcClearError();
+    var btn = $('runHpcBtn');
+    btn.classList.add('loading'); btn.disabled = true;
+    var req = {
+      nx: parseInt($('hpcNx').value,10) || 10,
+      ny: parseInt($('hpcNy').value,10) || 4,
+      nz: parseInt($('hpcNz').value,10) || 4,
+      length_mm: parseFloat($('hpcLength').value) || 150,
+      width_mm: parseFloat($('hpcWidth').value) || 30,
+      height_mm: parseFloat($('hpcHeight').value) || 30,
+      material: $('hpcMaterial').value,
+      load_n: parseFloat($('hpcLoadN').value) || 0,
+      load_dir: $('hpcLoadDir').value
+    };
+    try {
+      var res = await fetch(hpcApiBase() + '/analyze_large', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(req)
+      });
+      if (!res.ok){
+        var text = await res.text();
+        throw new Error('Server responded ' + res.status + ': ' + text.slice(0,300));
+      }
+      var data = await res.json();
+      renderHpcResults(data, req);
+    } catch(e){
+      hpcShowError('Could not complete the analysis.<br><code>' + String(e.message || e).replace(/</g,'&lt;') + '</code><br>Check the cloud endpoint above is reachable (it sleeps when idle on the free tier -- the first request after a while can take 30-60s to wake it).');
+    } finally {
+      btn.classList.remove('loading'); btn.disabled = false;
+    }
+  });
+
+  function renderHpcResults(data, req){
+    $('hpcEmptyState').style.display = 'none';
+    $('hpcResults').style.display = 'block';
+
+    var tiles = [];
+    tiles.push(tile('Nodes', data.nodes.toLocaleString(), ''));
+    tiles.push(tile('Elements', data.tets.toLocaleString(), 'CST tet'));
+    tiles.push(tile('Tip deflection', data.tip_deflection_mm.toFixed(4), 'mm'));
+    tiles.push(tile('Solve time', data.timing.solve_s.toFixed(2), 's'));
+    tiles.push(tile('Converged', data.converged ? 'yes' : 'no', data.converged ? '' : '(cg_info '+data.cg_info+')'));
+    $('hpcTiles').innerHTML = tiles.join('');
+
+    $('hpcDeckMeta').textContent = data.geometry.length_mm + '×' + data.geometry.width_mm + '×' + data.geometry.height_mm +
+      'mm · ' + data.nodes.toLocaleString() + ' nodes · sparse/iterative solver (cloud) · ' + data.timing.mesh_s.toFixed(3) + 's mesh + ' + data.timing.solve_s.toFixed(2) + 's solve';
+
+    var svgEl = $('svgHpc'), ampSlider = $('ampSliderHpc'), hint = $('hpcStageHint');
+    var fixedSet = new Set(data.sample.fixed_ids);
+    var pts = data.sample.node_xyz;
+    var disp = data.sample.node_disp;
+
+    function draw(){
+      svgEl.innerHTML = '';
+      var vb = svgEl.viewBox.baseVal;
+      var nodeMap = {};
+      pts.forEach(function(p, i){ nodeMap[i] = p; });
+      var toScreen = makeProjector(nodeMap, vb.width, vb.height);
+      var amp = parseFloat(ampSlider.value);
+      pts.forEach(function(p, i){
+        var d = disp[i] || [0,0,0];
+        var isFixed = fixedSet.has(i);
+        var up = toScreen(p[0], p[1], p[2]);
+        svgEl.appendChild(el('circle', { cx:up[0], cy:up[1], r:2.2, fill:'var(--ghost)', 'fill-opacity':'0.35' }));
+        var dp = toScreen(p[0]+d[0]*amp, p[1]+d[1]*amp, p[2]+d[2]*amp);
+        svgEl.appendChild(el('circle', {
+          cx:dp[0], cy:dp[1], r: isFixed?4:3, fill: isFixed?'var(--text)':'var(--deform)',
+          stroke:'var(--surface-2)', 'stroke-width':'1'
+        }));
+      });
+      hint.textContent = pts.length.toLocaleString() + ' sampled nodes (of ' + data.nodes.toLocaleString() + ' total)';
+    }
+    ampSlider.oninput = draw;
+    draw();
+  }
+
   // ==================== Upload / tet-mesh workflow ====================
   var meshState = {
     meshId: null, nodes: null, boundaryFaces: null, bbox: null,
@@ -1181,15 +1356,20 @@
 
   $('btnSrcParam').addEventListener('click', function(){ setGeomSource('param'); });
   $('btnSrcUpload').addEventListener('click', function(){ setGeomSource('upload'); });
+  $('btnSrcHpc').addEventListener('click', function(){ setGeomSource('hpc'); });
   function setGeomSource(src){
     $('btnSrcParam').classList.toggle('active', src==='param');
     $('btnSrcUpload').classList.toggle('active', src==='upload');
+    $('btnSrcHpc').classList.toggle('active', src==='hpc');
     $('parametricRail').style.display = src==='param' ? 'block' : 'none';
     $('uploadRail').style.display = src==='upload' ? 'block' : 'none';
+    $('hpcRail').style.display = src==='hpc' ? 'block' : 'none';
     $('meshMain').style.display = src==='upload' ? 'block' : 'none';
+    $('hpcMain').style.display = src==='hpc' ? 'block' : 'none';
     $('emptyState').style.display = src==='param' && !lastResult ? 'flex' : 'none';
     $('results').style.display = src==='param' && lastResult ? 'block' : 'none';
     if (src === 'upload') requestAnimationFrame(function(){ onMeshCanvasResize(); });
+    if (src === 'hpc') updateHpcNodeCountHint();
   }
 
   function initThree(){

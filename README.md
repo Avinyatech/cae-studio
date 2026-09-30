@@ -7,19 +7,27 @@ from source for modern toolchains and wraps it in a real application: a
 FastAPI backend, a web UI, a mobile app, an offline LLM assistant, and a
 cloud deployment path.
 
-It runs three of NASTRAN-95's rigid formats end to end, each validated
-against hand-calculated theory:
+It runs four of NASTRAN-95's rigid formats end to end, each validated
+against hand-calculated theory or a second independent solve:
 
 | Analysis | Rigid Format | Validated against |
 |---|---|---|
 | Normal modes (natural frequencies) | SOL 3 | Euler–Bernoulli beam theory: 167 Hz predicted, 167.6 Hz solved |
 | Static deflection under load | SOL 1 | *P·L³/3EI*: 5.95 mm predicted, 5.81 mm solved |
 | Direct frequency response | SOL 8 | Resonance peak at 168.75 Hz, matching the SOL 3 result |
+| Nonlinear (piecewise-linear) static | SOL 6 | Bilinear-plastic material; deflection ratio between load steps exceeds the load-factor ratio past yield, the expected softening signature |
 
 It also generates a tetrahedral volume mesh (via Gmsh) from an uploaded
 STL file, so you're not limited to simple parametric shapes — arbitrary
 "medium complexity" geometry works too, with boundary conditions assigned
 by clicking faces in an interactive 3D viewer.
+
+For models too big for NASTRAN-95's compiled binary to hold at all (its
+in-core working memory is a fixed-size array set at compile time — see
+[Hard-won lessons](#hard-won-lessons) #11), the cloud deployment adds a
+from-scratch sparse/iterative solver with genuine MPI-based distributed
+domain decomposition — see `cloud/README.md`'s
+[Large-model solver](cloud/README.md#large-model-solver) section.
 
 ## Why this exists
 
@@ -129,9 +137,35 @@ diagnose them too, not just this README.
 
 10. **`.f06` output wraps long tables across pages, re-emitting the
     section header on each page.** A naive parser that stops at the first
-    page break silently drops most of the data. `f06_parser.py` does a
-    two-pass scan: find every header occurrence first, then accumulate
-    rows between consecutive headers regardless of what page they're on.
+    page break silently drops most of the data — including when the
+    *same* header repeats mid-table with no new content in between (a
+    plain static run, not just per-load-step nonlinear results): the
+    naive fix of "keep whichever page had the most rows" quietly drops
+    every page but one. `f06_parser.py` does a two-pass scan: find every
+    header occurrence first, then merge rows across all of them by node
+    ID, regardless of what page they're on.
+
+11. **NASTRAN-95's entire in-core working memory is one fixed-size array,
+    baked in at compile time.** `COMMON/ZZZZZZ/IZ(14000000)` in
+    `src/nastrn.f` — the `DBMEM`/`OCMEM` env vars only divide that fixed
+    14-million-word pool, they can't exceed it (`LARGEST VALUE FOR OPEN
+    CORE ALLOWED IS: 14000000`). Empirically this caps the solver
+    somewhere between 32,000 and 128,000 nodes; going bigger needs a
+    genuinely different solver, not a config change — see
+    `cloud/README.md`'s Large-model solver section. Separately, any
+    non-trivial mesh's bulk-data echo and result tables also hit an
+    *unrelated* default output cap (`MAXLINES=20000`,
+    `USER FATAL MESSAGE 3019`) well before that real ceiling — fixed by
+    adding `ECHO=NONE` and a much higher `MAXLINES` to every generated
+    deck's case control.
+
+12. **`scipy`/`numpy`'s OpenBLAS-linked wheels need `libgomp.so.1` (GNU
+    OpenMP runtime) at import time**, which `python:3.11-slim` doesn't
+    ship. Without it, `import scipy` crash-loops the whole container on
+    startup (`OSError: libgomp.so.1: cannot open shared object file`) —
+    it looks like nothing is wrong with the code, because nothing is;
+    the base image is just missing a system library. Fix: `apt-get
+    install libgomp1` alongside the other runtime deps.
 
 ## License
 
