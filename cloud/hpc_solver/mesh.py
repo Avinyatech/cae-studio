@@ -72,16 +72,22 @@ def boundary_faces(tets):
     every element's faces (including interior ones) would just paint an
     opaque block, since interior faces are never visible from outside.
 
-    Returns (M,3) int array of node-row indices, winding order not
-    guaranteed consistent (fine for an isometric wireframe/fill viewer
-    that doesn't depend on backface culling).
+    Returns (faces, owner_tet): faces is (M,3) int array of node-row
+    indices (winding order not guaranteed consistent -- fine for an
+    isometric fill viewer that doesn't depend on backface culling);
+    owner_tet is (M,) the index into `tets` each face came from, so a
+    per-element field (stress, strain, fatigue life) can be looked up
+    for coloring that face.
     """
     local_faces = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
-    all_faces = np.empty((tets.shape[0] * 4, 3), dtype=tets.dtype)
+    n_tets = tets.shape[0]
+    all_faces = np.empty((n_tets * 4, 3), dtype=tets.dtype)
+    owner = np.empty(n_tets * 4, dtype=np.int64)
     for i, (a, b, c) in enumerate(local_faces):
         all_faces[i::4] = tets[:, [a, b, c]]
+        owner[i::4] = np.arange(n_tets)
 
     sorted_faces = np.sort(all_faces, axis=1)
     _, inverse, counts = np.unique(sorted_faces, axis=0, return_inverse=True, return_counts=True)
     is_boundary = counts[inverse] == 1
-    return all_faces[is_boundary]
+    return all_faces[is_boundary], owner[is_boundary]

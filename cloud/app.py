@@ -433,11 +433,13 @@ def analyze_large(req: LargeModelRequest):
     loaded = face_node_ids(nodes, axis=0, value=req.length_mm)
     comp_idx = {"x": 0, "y": 1, "z": 2}[req.load_dir]
 
+    b_faces, b_owner = hpc_boundary_faces(tets)
     mesh_info = dict(
         nodes=len(nodes), tets=len(tets), ndof=len(nodes) * 3,
         geometry=dict(length_mm=req.length_mm, width_mm=req.width_mm, height_mm=req.height_mm),
         node_xyz=nodes.tolist(),
-        boundary_faces=hpc_boundary_faces(tets).tolist(),
+        boundary_faces=b_faces.tolist(),
+        boundary_face_owner_tet=b_owner.tolist(),
         fixed_ids=[int(i) for i in fixed],
     )
 
