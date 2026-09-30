@@ -307,7 +307,15 @@ def analyze_mesh(req: MeshAnalysisRequest):
 # cluster to distribute across anyway) -- the MPI path is the architecture
 # ready for whenever this runs on an actual multi-node cluster, not
 # something this deployment exercises.
-MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "60000"))
+#
+# MAX_HPC_NODES is deliberately conservative, set from live testing against
+# this actual free-tier instance, not a theoretical estimate: 1,701 nodes
+# solved in 1.2s, but 5,239 nodes hung past 90s without responding (and the
+# container needed a restart afterward) -- a jump far too large to be
+# explained by CG iteration count alone, pointing to this instance running
+# out of RAM and thrashing rather than failing cleanly. Raise this only
+# after confirming headroom directly against the deployed instance.
+MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "2000"))
 
 
 class LargeModelRequest(BaseModel):
@@ -322,7 +330,7 @@ class LargeModelRequest(BaseModel):
     load_n: float = Field(5000.0)
     load_dir: Literal["x", "y", "z"] = "z"
     tol: float = Field(1e-8, gt=0, le=1e-2)
-    max_iter: int = Field(20000, ge=100, le=200000)
+    max_iter: int = Field(3000, ge=100, le=5000)
 
 
 @app.post("/analyze_large")
