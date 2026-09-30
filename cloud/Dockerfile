@@ -29,6 +29,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py deck_generator.py f06_parser.py solver_runner.py assistant.py tetmesh.py ./
+COPY hpc_solver ./hpc_solver
 
 ENV NASTRAN_ROOT=/n
 EXPOSE 8080

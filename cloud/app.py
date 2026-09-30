@@ -1,5 +1,6 @@
 import math
 import os
+import time
 import traceback
 import uuid
 
@@ -13,6 +14,9 @@ from f06_parser import parse_f06
 from solver_runner import run_job, SolveError
 from tetmesh import mesh_stl_bytes, MeshError
 import assistant
+
+from hpc_solver.mesh import box_mesh, face_node_ids
+from hpc_solver.serial import solve_static as hpc_solve_static
 
 MESH_STORE = {}  # mesh_id -> {nodes, tets, boundary_faces, bbox} (in-memory, single-user local tool)
 
@@ -279,6 +283,110 @@ def analyze_mesh(req: MeshAnalysisRequest):
             response["freq_response"]["peak_magnitude_mm"] = peak["mag"][comp_idx]
 
     return response
+
+
+# ==================== Large-model (sparse/iterative) solver ====================
+# A from-scratch CST-tetrahedron + sparse-matrix + Jacobi-preconditioned CG
+# solver (hpc_solver/), built specifically because NASTRAN-95's compiled
+# binary has a hard, compile-time working-memory ceiling: its entire in-core
+# array is COMMON/ZZZZZZ/IZ(14000000) in src/nastrn.f, a fixed size baked in
+# at build time that no request/setting can exceed. This path sidesteps
+# that binary entirely for bigger models -- limited only by this container's
+# RAM, not a fixed array. It reuses the same CST-tet element math NASTRAN's
+# own CTETRA uses; hpc_solver/validate_serial.py cross-checked our assembly
+# against NASTRAN-95's CTETRA solve directly (agreement converges from
+# ~2.5% to ~0.9% as the mesh is refined -- the expected pattern for two
+# independent, correct implementations of the same physics on a coarse
+# mesh) before this was wired in.
+#
+# hpc_solver/dcg.py + driver.py implement genuine MPI-based distributed-
+# memory domain decomposition (RCB partitioning, distributed CG with
+# Allreduce/Allgatherv) and were validated locally to give bit-identical
+# results across 1/2/4/8 MPI ranks. This free-tier container runs it as a
+# single process (no MPI runtime in this image, and a free instance has no
+# cluster to distribute across anyway) -- the MPI path is the architecture
+# ready for whenever this runs on an actual multi-node cluster, not
+# something this deployment exercises.
+MAX_HPC_NODES = int(os.environ.get("MAX_HPC_NODES", "60000"))
+
+
+class LargeModelRequest(BaseModel):
+    nx: int = Field(20, ge=1, le=400)
+    ny: int = Field(6, ge=1, le=400)
+    nz: int = Field(6, ge=1, le=400)
+    length_mm: float = Field(200.0, gt=0)
+    width_mm: float = Field(40.0, gt=0)
+    height_mm: float = Field(40.0, gt=0)
+    material: str = Field("steel")
+    material_custom: Optional[dict] = None
+    load_n: float = Field(5000.0)
+    load_dir: Literal["x", "y", "z"] = "z"
+    tol: float = Field(1e-8, gt=0, le=1e-2)
+    max_iter: int = Field(20000, ge=100, le=200000)
+
+
+@app.post("/analyze_large")
+def analyze_large(req: LargeModelRequest):
+    n_nodes = (req.nx + 1) * (req.ny + 1) * (req.nz + 1)
+    if n_nodes > MAX_HPC_NODES:
+        raise HTTPException(
+            400,
+            "%d nodes requested, this free-tier instance is capped at %d "
+            "(MAX_HPC_NODES) to stay within its RAM -- reduce nx/ny/nz." % (n_nodes, MAX_HPC_NODES),
+        )
+
+    mat = req.material_custom
+    if not mat:
+        mat = MATERIAL_PRESETS.get(req.material)
+        if not mat:
+            raise HTTPException(400, "unknown material: %s" % req.material)
+
+    t0 = time.time()
+    nodes, tets = box_mesh(req.nx, req.ny, req.nz, req.length_mm, req.width_mm, req.height_mm)
+    t_mesh = time.time() - t0
+
+    fixed = face_node_ids(nodes, axis=0, value=0.0)
+    loaded = face_node_ids(nodes, axis=0, value=req.length_mm)
+    comp_idx = {"x": 0, "y": 1, "z": 2}[req.load_dir]
+    per_node = req.load_n / len(loaded)
+    loads = {}
+    for nid in loaded:
+        vec = [0.0, 0.0, 0.0]
+        vec[comp_idx] = per_node
+        loads[int(nid)] = tuple(vec)
+
+    t0 = time.time()
+    try:
+        u, info = hpc_solve_static(nodes, tets, mat["E"], mat["nu"], fixed, loads,
+                                    method="cg", tol=req.tol, maxiter=req.max_iter)
+    except MemoryError:
+        raise HTTPException(507, "ran out of memory solving this mesh -- reduce nx/ny/nz")
+    t_solve = time.time() - t0
+
+    tip_disp = u[loaded, comp_idx]
+    max_disp = float(abs(u).max())
+
+    # full per-node vectors would be huge (and pointless) to ship back at
+    # this scale -- return a decimated sample for a lightweight preview,
+    # plus the numeric summary that's the actual point of this path.
+    stride = max(1, len(nodes) // 4000)
+    sample_idx = list(range(0, len(nodes), stride))
+    sample_set = set(sample_idx)
+    sample_fixed = [int(i) for i in fixed if i in sample_set]
+    return dict(
+        analysis="large_static",
+        nodes=len(nodes), tets=len(tets), ndof=len(nodes) * 3,
+        converged=(info == 0), cg_info=int(info),
+        timing=dict(mesh_s=t_mesh, solve_s=t_solve),
+        tip_deflection_mm=float(tip_disp.mean()),
+        max_deflection_mm=max_disp,
+        geometry=dict(length_mm=req.length_mm, width_mm=req.width_mm, height_mm=req.height_mm),
+        sample=dict(
+            node_xyz=[nodes[i].tolist() for i in sample_idx],
+            node_disp=[u[i].tolist() for i in sample_idx],
+            fixed_ids=sample_fixed,
+        ),
+    )
 
 
 class AssistantParseRequest(BaseModel):
