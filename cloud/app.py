@@ -37,7 +37,7 @@ class AnalysisRequest(BaseModel):
     material: str = Field("steel")
     material_custom: Optional[dict] = None  # {E, nu, rho} overrides `material` if set
     bc: Literal["cantilever", "simply_supported", "fixed_fixed"] = "cantilever"
-    analysis: Literal["modes", "static", "freq_response"] = "modes"
+    analysis: Literal["modes", "static", "freq_response", "nonlinear"] = "modes"
     num_modes: int = Field(8, ge=1, le=30)
     freq_max_hz: float = Field(2.0e5, gt=0)
     load_n: float = Field(100.0)
@@ -46,6 +46,10 @@ class AnalysisRequest(BaseModel):
     freq_end_hz: float = Field(300.0, gt=0)
     num_freq_points: int = Field(41, ge=2, le=200)
     damping_g: float = Field(0.02, ge=0, le=1)
+    yield_stress_mpa: float = Field(250.0, gt=0)
+    tangent_modulus_mpa: float = Field(2000.0, gt=0)
+    max_strain: float = Field(0.05, gt=0)
+    num_load_steps: int = Field(4, ge=1, le=20)
 
 
 @app.get("/materials")
@@ -116,6 +120,32 @@ def analyze(req: AnalysisRequest):
             element_stress[str(eid)] = entry
         response["static"]["element_stress"] = element_stress
         response["static"]["max_von_mises_mpa"] = max_vm
+    elif result["analysis"] == "nonlinear":
+        monitor_node = meta["monitor_node"]
+        comp_idx = {"x": 0, "y": 1}[meta["load_dir"]]
+        curve = []
+        for step in result["nonlinear"]["steps"]:
+            v = step["vectors"].get(monitor_node)
+            curve.append(dict(
+                step=step["step"],
+                load_factor=step["step"] / meta["num_load_steps"],
+                load_n=meta["load_n"] * step["step"] / meta["num_load_steps"],
+                monitor_deflection_mm=v[comp_idx] if v else None,
+                epsilon=step["epsilon"],
+            ))
+        response["nonlinear"] = dict(
+            monitor_node=monitor_node,
+            component=meta["load_dir"],
+            yield_stress_mpa=meta["yield_stress_mpa"],
+            tangent_modulus_mpa=meta["tangent_modulus_mpa"],
+            max_strain=meta["max_strain"],
+            load_deflection_curve=curve,
+            steps=[
+                dict(step=s["step"], epsilon=s["epsilon"],
+                     vectors={str(k): v for k, v in s["vectors"].items()})
+                for s in result["nonlinear"]["steps"]
+            ],
+        )
     else:  # freq_response
         comp_idx = {"x": 0, "y": 1, "z": 2}[req.load_dir]
         node_id = meta["monitor_node"]

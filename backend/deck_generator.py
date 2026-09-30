@@ -64,6 +64,158 @@ def grid_id(ix, iy, ny):
     return ix * (ny + 1) + iy + 1
 
 
+def _tables1_cards(tid, pairs):
+    """
+    Build a TABLES1 card plus continuations for a list of (x, y) pairs,
+    packing up to 4 pairs (8 data values) per continuation line.
+
+    Under-packing this (2 pairs/line spread across 3+ chained continuation
+    cards) was found by trial to trigger a "USER FATAL MESSAGE 316 ILLEGAL
+    DATA ON TABLES1" / "MESSAGE 315 FORMAT ERROR ON PLFACT" pair in this
+    NASTRAN-95 build, even though every individual field was byte-aligned
+    correctly -- packing each continuation line as full as it will hold
+    (matching how NASA's own demo decks do it) avoids the bug.
+    """
+    tid = int(tid)
+    vals = []
+    for x, y in pairs:
+        vals.append(_fnum(x))
+        vals.append(_fnum(y))
+    vals.append("ENDT")
+    chunks = [vals[i:i + 8] for i in range(0, len(vals), 8)]
+    label_base = "+T%d" % tid
+    out = []
+    header_cont = (label_base + "A")[:8] if len(chunks) > 1 else None
+    out.append(_card(["TABLES1", str(tid)], cont_out=header_cont))
+    for i, chunk in enumerate(chunks):
+        this_label = (label_base + chr(ord("A") + i))[:8]
+        next_label = (label_base + chr(ord("A") + i + 1))[:8] if i + 1 < len(chunks) else None
+        out.append(_card([this_label] + chunk, cont_out=next_label))
+    return out
+
+
+def _build_nonlinear_deck(spec, L, W, t, nx, ny, bc, E, nu, rho, nodes, elements,
+                           left_edge, right_edge, target_edge, monitor_node, n_mass_dof):
+    """
+    SOL 6 piecewise-linear static analysis: a bilinear (elastic, then
+    reduced-tangent) stress-strain curve applied via MATS1/TABLES1, with
+    the load ramped up in fractional increments via PLFACT. Validated
+    against NASA's own d06011a.inp cracked-panel demo before generalizing.
+    """
+    load_dir = spec.get("load_dir", "y")
+    if load_dir not in ("x", "y"):
+        raise ValueError(
+            "nonlinear analysis uses in-plane membrane elements (CTRMEM) with no "
+            "out-of-plane stiffness -- load_dir must be 'x' or 'y', not 'z'"
+        )
+    yield_stress = float(spec.get("yield_stress_mpa", 250.0))
+    Et = float(spec.get("tangent_modulus_mpa", E / 100.0))
+    max_strain = float(spec.get("max_strain", 0.05))
+    num_load_steps = max(1, min(int(spec.get("num_load_steps", 4)), 20))
+    load_n = float(spec.get("load_n", 100.0))
+
+    yield_strain = yield_stress / E
+    if max_strain <= yield_strain:
+        raise ValueError("max_strain must be greater than the elastic yield_strain (yield_stress/E)")
+    max_stress = yield_stress + Et * (max_strain - yield_strain)
+
+    # Triangulate the quad mesh: CTRMEM (triangular membrane) is what this
+    # NASTRAN-95 build's SOL 6 nonlinear-material DMAP path actually works
+    # with -- see build_deck's docstring note on why CQUAD4 is avoided here.
+    tris = []
+    for g1, g2, g3, g4 in elements:
+        tris.append((g1, g2, g3))
+        tris.append((g1, g3, g4))
+
+    fixed_ids = sorted(set(left_edge) if bc == "cantilever" else set(left_edge) | set(right_edge))
+    free_ids = [g for g in nodes if g not in fixed_ids]
+
+    title = "NONLINEAR %.0fx%.0fx%.1fMM, %dx%d MESH, %s, YIELD=%.0fMPA" % (
+        L, W, t, nx, ny, bc.upper(), yield_stress)
+
+    lines = []
+    lines.append("ID    PARAM95,NASTRAN".ljust(80) + "\n")
+    lines.append("APP   DISPLACEMENT".ljust(80) + "\n")
+    lines.append("SOL   6".ljust(80) + "\n")
+    lines.append("TIME  30".ljust(80) + "\n")
+    lines.append("CEND\n")
+    lines.append("TITLE    = %s\n" % title[:72])
+    lines.append("SPC   = 10\n")
+    lines.append("LOAD  = 20\n")
+    lines.append("PLCOEFFICIENT = 30\n")
+    lines.append("DISP  = ALL\n")
+    lines.append("BEGIN BULK\n")
+
+    lines.append("$ CTRMEM is a pure in-plane membrane (no bending, no out-of-plane\n")
+    lines.append("$ stiffness) -- globally fix T3 and all rotations, nothing solves for them.\n")
+    lines.append(_card(["GRDSET", "", "", "", "", "", "", "3456"]))
+
+    lines.append("$ Grid points\n")
+    for gid in sorted(nodes):
+        x, y, z = nodes[gid]
+        lines.append(_card(["GRID", str(gid), "", _fnum(x), _fnum(y), _fnum(z)]))
+
+    lines.append("$ Elements: %d CTRMEM triangular membranes (%dx%d mesh, 2 tris/quad)\n" % (len(tris), nx, ny))
+    for i, (g1, g2, g3) in enumerate(tris, start=1):
+        lines.append(_card(["CTRMEM", str(i), "1", str(g1), str(g2), str(g3)]))
+    lines.append(_card(["PTRMEM", "1", "1", _fnum(t), "0.0"]))
+
+    lines.append("$ Material: linear-elastic base (MAT1) plus a bilinear stress-strain\n")
+    lines.append("$ curve (MATS1 -> TABLES1) that makes it nonlinear past yield\n")
+    lines.append(_card(["MAT1", "1", _fnum(E), "", _fnum(nu), _fnum(rho)]))
+    lines.append(_card(["MATS1", "1", "101"]))
+    pairs = [
+        (-max_strain, -max_stress), (-yield_strain, -yield_stress),
+        (0.0, 0.0),
+        (yield_strain, yield_stress), (max_strain, max_stress),
+    ]
+    lines.extend(_tables1_cards(101, pairs))
+
+    lines.append("$ Constraints (GRDSET already fixes T3 + all rotations everywhere;\n")
+    lines.append("$ this fixes the in-plane translations at the support edge(s))\n")
+    fix_groups = [left_edge] if bc == "cantilever" else [left_edge, right_edge]
+    for grp in fix_groups:
+        rest = list(grp)
+        chunk = rest[:6]
+        rest = rest[6:]
+        lines.append(_card(["SPC1", "10", "12"] + [str(g) for g in chunk]))
+        while rest:
+            lines.append(_card(["SPC1", "10", "12"] + [str(g) for g in rest[:7]]))
+            rest = rest[7:]
+
+    lines.append("$ In-plane point loads distributed over the load edge\n")
+    comp_vec = {"x": (1, 0, 0), "y": (0, 1, 0)}[load_dir]
+    per_node = load_n / len(target_edge)
+    for gid in target_edge:
+        lines.append(_card(["FORCE", "20", str(gid), "0", _fnum(per_node),
+                             _fnum(comp_vec[0]), _fnum(comp_vec[1]), _fnum(comp_vec[2])]))
+
+    lines.append("$ Load ramp: fractional multipliers of the base FORCE load\n")
+    steps = [round((i + 1) / num_load_steps, 4) for i in range(num_load_steps)]
+    chunk = steps[:6]
+    rest = steps[6:]
+    plfact_cont = "+PL1" if rest else None
+    lines.append(_card(["PLFACT", "30"] + [str(s) for s in chunk], cont_out=plfact_cont))
+    i = 1
+    while rest:
+        this_chunk = rest[:7]
+        rest = rest[7:]
+        next_cont = "+PL%d" % (i + 1) if rest else None
+        lines.append(_card(["+PL%d" % i] + [str(s) for s in this_chunk], cont_out=next_cont))
+        i += 1
+
+    lines.append("ENDDATA\n")
+
+    meta = dict(
+        nodes=nodes, elements=tris, fixed_ids=fixed_ids, free_ids=sorted(free_ids),
+        n_mass_dof=n_mass_dof, nx=nx, ny=ny, L=L, W=W, t=t, bc=bc, analysis="nonlinear",
+        target_edge=target_edge, monitor_node=monitor_node,
+        yield_stress_mpa=yield_stress, tangent_modulus_mpa=Et, max_strain=max_strain,
+        num_load_steps=num_load_steps, load_n=load_n, load_dir=load_dir,
+    )
+    return "".join(lines), meta
+
+
 def build_deck(spec):
     """
     spec: dict with keys
@@ -71,17 +223,33 @@ def build_deck(spec):
       nx, ny (int, mesh divisions along length / width, >=1)
       material: name in MATERIAL_PRESETS, or dict(E=,nu=,rho=)
       bc: "cantilever" | "simply_supported" | "fixed_fixed"
-      analysis: "modes" | "static" | "freq_response"
+      analysis: "modes" | "static" | "freq_response" | "nonlinear"
       num_modes (int, only for modes)
       freq_max_hz (float, only for modes, default 2e5)
-      load_n (float, for static/freq_response, total load magnitude in Newtons)
-      load_dir: "z" | "y" | "x" (for static/freq_response, default "z")
+      load_n (float, for static/freq_response/nonlinear, total load magnitude in Newtons)
+      load_dir: "z" | "y" | "x" (for static/freq_response, default "z";
+                for nonlinear must be "x" or "y" -- see note below)
       freq_start_hz, freq_end_hz (float, only for freq_response)
       num_freq_points (int, only for freq_response, default 41)
       damping_g (float, only for freq_response, structural damping coeff, default 0.02)
+      yield_stress_mpa (float, only for nonlinear, default 250.0)
+      tangent_modulus_mpa (float, only for nonlinear, post-yield tangent
+                            modulus, default E/100)
+      max_strain (float, only for nonlinear, curve extent, default 0.05)
+      num_load_steps (int, only for nonlinear, default 4)
     Returns (deck_text, meta) where meta has grid/element bookkeeping
     the caller needs to interpret the .f06 output (node ids, coords,
     fixed node ids, free node ids, element list).
+
+    Nonlinear analysis (SOL 6, piecewise-linear stress-dependent material
+    via MATS1/TABLES1, incrementally loaded via PLFACT) uses CTRMEM/PTRMEM
+    (triangular membrane) elements instead of CQUAD4/PSHELL, because this
+    NASTRAN-95 build's SOL 6 DMAP path was found empirically to reject
+    CQUAD4 with cryptic MATS1/PLFACT card-format errors while CTRMEM works
+    cleanly with an identical material/load setup. CTRMEM has no bending or
+    out-of-plane stiffness, so load_dir must be in-plane ("x" or "y"), and
+    every node's T3,R1,R2,R3 are globally fixed via GRDSET (there's no
+    stiffness there to solve for).
     """
     L = float(spec["length_mm"])
     W = float(spec["width_mm"])
@@ -134,6 +302,10 @@ def build_deck(spec):
     # load/monitor edge: the free end for a cantilever, mid-span otherwise
     target_edge = right_edge if bc == "cantilever" else [grid_id(nx // 2, iy, ny) for iy in range(nny)]
     monitor_node = target_edge[len(target_edge) // 2]
+
+    if analysis == "nonlinear":
+        return _build_nonlinear_deck(spec, L, W, t, nx, ny, bc, E, nu, rho, nodes, elements,
+                                      left_edge, right_edge, target_edge, monitor_node, n_mass_dof)
 
     lines = []
     title = "PARAMETRIC SHELL %.0fx%.0fx%.1fMM, %dx%d MESH, %s" % (L, W, t, nx, ny, bc.upper())

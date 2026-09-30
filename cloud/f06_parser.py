@@ -8,6 +8,9 @@ ROW_RE = re.compile(
     r"^\s*(\d+)\s+G\s+([\d.\-+E]+)\s+([\d.\-+E]+)\s+([\d.\-+E]+)\s+([\d.\-+E]+)\s+([\d.\-+E]+)\s+([\d.\-+E]+)\s*$"
 )
 
+LOAD_FACTOR_HDR_RE = re.compile(r"LOAD\s+FACTOR\s+(\d+)")
+EPSILON_RE = re.compile(r"FOR SUBCASE NUMBER\s+(\d+),\s*EPSILON SUB E\s*=\s*([\d.\-+E]+)")
+
 POINT_HDR_RE = re.compile(r"POINT-ID\s*=\s*(\d+)")
 # Each frequency row is preceded by a standalone Fortran carriage-control "0"
 # (double-space-before marker) as its own whitespace-separated token, distinct
@@ -112,9 +115,16 @@ def parse_f06(text):
     n = len(lines)
 
     # Pass 1: find every section-start line (mode header, static disp header,
-    # or complex-frequency-response point header)
+    # or complex-frequency-response point header). A nonlinear (SOL 6) run
+    # prints one "LOAD FACTOR N" banner before each step's displacement
+    # table -- track the most recently seen one so each "static" start can
+    # be tagged with the load step it belongs to.
     starts = []  # (line_idx, kind, extra)
+    current_load_step = None
     for idx, ln in enumerate(lines):
+        lm = LOAD_FACTOR_HDR_RE.search(ln)
+        if lm:
+            current_load_step = int(lm.group(1))
         m = MODE_HDR_RE.search(ln)
         if m:
             mode_no = None
@@ -133,10 +143,13 @@ def parse_f06(text):
             starts.append((idx, "stress_table", {}))
             continue
         if DISP_HDR_RE.search(ln) and "C O M P L E X" not in ln.upper():
-            starts.append((idx, "static", {}))
+            starts.append((idx, "static", dict(load_step=current_load_step)))
+
+    epsilons = {int(mo.group(1)): _f(mo.group(2)) for mo in EPSILON_RE.finditer(text)}
 
     modes = []
     static_vectors = None
+    nonlinear_steps = {}  # load_step -> vectors (merged across page wraps)
     freq_points_by_node = {}
     element_stress = {}
 
@@ -148,8 +161,14 @@ def parse_f06(text):
                                freq_hz=extra["freq_hz"], vectors=vectors))
         elif kind == "static":
             vectors = _collect_vectors(lines, idx, end)
-            if static_vectors is None or len(vectors) > len(static_vectors):
-                static_vectors = vectors
+            step = extra.get("load_step")
+            if step is not None:
+                existing = nonlinear_steps.get(step)
+                if existing is None or len(vectors) > len(existing):
+                    nonlinear_steps[step] = vectors
+            else:
+                if static_vectors is None or len(vectors) > len(static_vectors):
+                    static_vectors = vectors
         elif kind == "freq_point":
             pts = _collect_freq_points(lines, idx, end)
             node_id = extra["node_id"]
@@ -164,6 +183,8 @@ def parse_f06(text):
 
     if modes:
         analysis = "modes"
+    elif nonlinear_steps:
+        analysis = "nonlinear"
     elif freq_points_by_node:
         analysis = "freq_response"
     elif static_vectors:
@@ -172,6 +193,13 @@ def parse_f06(text):
         analysis = None
 
     ok = analysis is not None
+    nonlinear = None
+    if nonlinear_steps:
+        steps = []
+        for step in sorted(nonlinear_steps):
+            steps.append(dict(step=step, vectors=nonlinear_steps[step], epsilon=epsilons.get(step)))
+        nonlinear = dict(steps=steps)
+
     return dict(
         ok=ok,
         error=None if ok else "no results found in .f06 (check deck/echo for a non-fatal parse issue)",
@@ -179,4 +207,5 @@ def parse_f06(text):
         modes=modes,
         static=dict(vectors=static_vectors, element_stress=element_stress) if static_vectors else None,
         freq_response=dict(points_by_node=freq_points_by_node) if freq_points_by_node else None,
+        nonlinear=nonlinear,
     )

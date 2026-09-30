@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>NASTRAN Design Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -304,6 +305,7 @@
         <button id="btnModes" class="active">Normal modes</button>
         <button id="btnStatic">Static</button>
         <button id="btnFreq">Freq. response</button>
+        <button id="btnNonlinear">Nonlinear</button>
       </div>
       <div id="modesFields" class="field"><label for="numModes">Modes to extract</label><input type="number" id="numModes" value="6" min="1" max="30"></div>
       <div id="staticFields" style="display:none;">
@@ -330,6 +332,20 @@
         <div class="field"><label for="freqPoints">Points</label><input type="number" id="freqPoints" value="41" min="2" max="200"><span class="unit"></span></div>
         <div class="field"><label for="dampingG">Damping (G)</label><input type="number" id="dampingG" value="0.02" min="0" max="1" step="0.01"><span class="unit"></span></div>
       </div>
+      <div id="nonlinearFields" style="display:none;">
+        <div class="field"><label for="nlLoadN">Total load</label><input type="number" id="nlLoadN" value="800" min="0"><span class="unit">N</span></div>
+        <div class="field stack" style="margin:8px 0;">
+          <select id="nlLoadDir">
+            <option value="y" selected>Y — in-plane, across width</option>
+            <option value="x">X — in-plane, along length</option>
+          </select>
+        </div>
+        <div class="field"><label for="nlYield">Yield stress</label><input type="number" id="nlYield" value="250" min="1"><span class="unit">MPa</span></div>
+        <div class="field"><label for="nlTangent">Tangent modulus</label><input type="number" id="nlTangent" value="2000" min="1"><span class="unit">MPa</span></div>
+        <div class="field"><label for="nlMaxStrain">Max strain</label><input type="number" id="nlMaxStrain" value="0.05" min="0.001" step="0.001"><span class="unit"></span></div>
+        <div class="field"><label for="nlSteps">Load steps</label><input type="number" id="nlSteps" value="4" min="1" max="20"><span class="unit"></span></div>
+        <div class="hint">Nonlinear runs on CTRMEM (triangular membrane) elements with a bilinear stress-strain curve past yield — in-plane loads only (no bending).</div>
+      </div>
     </div>
 
     <button class="run-btn" id="runBtn"><span class="spin"></span><span class="label">Run analysis</span></button>
@@ -338,7 +354,7 @@
       <button class="explain-btn" id="explainBtn">Explain this error</button>
       <div class="explain-box" id="explainBox"></div>
     </div>
-    <div class="hint">Solves on the NASTRAN-95 (COSMIC, 1976) binary running as a local FastAPI service: SOL 3 for normal modes, SOL 1 for static loads, SOL 8 for direct frequency response with structural damping.</div>
+    <div class="hint">Solves on the NASTRAN-95 (COSMIC, 1976) binary running as a local FastAPI service: SOL 3 for normal modes, SOL 1 for static loads, SOL 8 for direct frequency response with structural damping, SOL 6 for piecewise-linear nonlinear statics.</div>
     </div>
 
     <div id="uploadRail" style="display:none;">
@@ -535,6 +551,33 @@
         </div>
       </div>
 
+      <div class="panel" id="nonlinearPanel" style="display:none;">
+        <h2>Load&ndash;deflection curve</h2>
+        <div class="stage" style="background:var(--surface);">
+          <svg id="svgNlCurve" viewBox="0 0 640 340"></svg>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--deform);"></span>Monitor node deflection</span>
+          <span><span class="sw" style="background:var(--ghost); opacity:.6;"></span>Linear-elastic reference</span>
+        </div>
+      </div>
+
+      <div class="panel" id="nonlinearShapePanel" style="display:none;">
+        <h2>Deformed shape by load step</h2>
+        <div class="modechips" id="nlStepChips"></div>
+        <div class="stage">
+          <div class="stage-hint" id="nlStepLabel"></div>
+          <svg id="svgNl" viewBox="0 0 640 360"></svg>
+        </div>
+        <div class="viewer-controls">
+          <label style="display:flex; align-items:center; gap:8px; flex:1;">Amplitude<input type="range" id="ampSliderNl" min="1" max="40" value="16"></label>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--ghost); opacity:.5;"></span>Undeformed</span>
+          <span><span class="sw" style="background:var(--deform);"></span>Deformed at selected step</span>
+        </div>
+      </div>
+
       <div class="footer-note" id="deckMeta"></div>
     </div>
   </main>
@@ -549,14 +592,17 @@
   $('btnModes').addEventListener('click', function(){ setAnalysis('modes'); });
   $('btnStatic').addEventListener('click', function(){ setAnalysis('static'); });
   $('btnFreq').addEventListener('click', function(){ setAnalysis('freq_response'); });
+  $('btnNonlinear').addEventListener('click', function(){ setAnalysis('nonlinear'); });
   function setAnalysis(mode){
     analysisMode = mode;
     $('btnModes').classList.toggle('active', mode==='modes');
     $('btnStatic').classList.toggle('active', mode==='static');
     $('btnFreq').classList.toggle('active', mode==='freq_response');
+    $('btnNonlinear').classList.toggle('active', mode==='nonlinear');
     $('modesFields').style.display = mode==='modes' ? 'flex' : 'none';
     $('staticFields').style.display = mode==='static' ? 'block' : 'none';
     $('freqRespFields').style.display = mode==='freq_response' ? 'block' : 'none';
+    $('nonlinearFields').style.display = mode==='nonlinear' ? 'block' : 'none';
   }
 
   function apiBase(){ return apiBaseEl.value.replace(/\/+$/,''); }
@@ -663,6 +709,10 @@
   async function runAnalysis(){
     clearError();
     runBtn.classList.add('loading'); runBtn.disabled = true;
+    var loadN, loadDir;
+    if (analysisMode === 'freq_response'){ loadN = parseFloat($('freqLoadN').value) || 0; loadDir = $('freqLoadDir').value; }
+    else if (analysisMode === 'nonlinear'){ loadN = parseFloat($('nlLoadN').value) || 0; loadDir = $('nlLoadDir').value; }
+    else { loadN = parseFloat($('loadN').value) || 0; loadDir = $('loadDir').value; }
     var req = {
       length_mm: parseFloat($('lengthMm').value),
       width_mm: parseFloat($('widthMm').value),
@@ -674,12 +724,16 @@
       analysis: analysisMode,
       num_modes: parseInt($('numModes').value, 10) || 6,
       freq_max_hz: 200000,
-      load_n: analysisMode==='freq_response' ? (parseFloat($('freqLoadN').value) || 0) : (parseFloat($('loadN').value) || 0),
-      load_dir: analysisMode==='freq_response' ? $('freqLoadDir').value : $('loadDir').value,
+      load_n: loadN,
+      load_dir: loadDir,
       freq_start_hz: parseFloat($('freqStart').value) || 0,
       freq_end_hz: parseFloat($('freqEnd').value) || 300,
       num_freq_points: parseInt($('freqPoints').value, 10) || 41,
-      damping_g: parseFloat($('dampingG').value)
+      damping_g: parseFloat($('dampingG').value),
+      yield_stress_mpa: parseFloat($('nlYield').value) || 250,
+      tangent_modulus_mpa: parseFloat($('nlTangent').value) || 2000,
+      max_strain: parseFloat($('nlMaxStrain').value) || 0.05,
+      num_load_steps: parseInt($('nlSteps').value, 10) || 4
     };
     try {
       var res = await fetch(apiBase() + '/analyze', {
@@ -770,7 +824,7 @@
 
     var tiles = [];
     tiles.push(tile('Nodes', nNodes, ''));
-    tiles.push(tile('Elements', nElems, 'CQUAD4'));
+    tiles.push(tile('Elements', nElems, data.analysis === 'nonlinear' ? 'CTRMEM' : 'CQUAD4'));
     if (data.analysis === 'modes'){
       var f1 = data.modes[0] ? data.modes[0].freq_hz : 0;
       tiles.push(tile('Mode 1', f1.toFixed(1), 'Hz'));
@@ -779,13 +833,19 @@
       tiles.push(tile('Max deflection', data.static.max_deflection_mm.toFixed(3), 'mm'));
       tiles.push(tile('Max von Mises', data.static.max_von_mises_mpa.toFixed(1), 'MPa'));
       tiles.push(tile('Load', $('loadN').value, 'N'));
+    } else if (data.analysis === 'nonlinear'){
+      var curve = data.nonlinear.load_deflection_curve;
+      var last = curve[curve.length - 1];
+      tiles.push(tile('Final deflection', Math.abs(last.monitor_deflection_mm).toFixed(3), 'mm'));
+      tiles.push(tile('Yield stress', data.nonlinear.yield_stress_mpa.toFixed(0), 'MPa'));
+      tiles.push(tile('Load steps', curve.length, ''));
     } else {
       tiles.push(tile('Peak response', data.freq_response.peak_magnitude_mm.toFixed(3), 'mm'));
       tiles.push(tile('At frequency', data.freq_response.peak_freq_hz.toFixed(1), 'Hz'));
     }
     $('tiles').innerHTML = tiles.join('');
 
-    var solLabel = {modes:'3 (normal modes)', static:'1 (statics)', freq_response:'8 (freq. response)'}[data.analysis];
+    var solLabel = {modes:'3 (normal modes)', static:'1 (statics)', freq_response:'8 (freq. response)', nonlinear:'6 (piecewise-linear nonlinear)'}[data.analysis];
     $('deckMeta').textContent = data.geometry.length_mm + '×' + data.geometry.width_mm + '×' + data.geometry.thickness_mm +
       'mm · ' + data.geometry.bc + ' · SOL ' + solLabel;
 
@@ -796,6 +856,8 @@
     $('stressPanel').style.display = 'none';
     $('tablePanel').style.display = 'none';
     $('frfPanel').style.display = 'none';
+    $('nonlinearPanel').style.display = 'none';
+    $('nonlinearShapePanel').style.display = 'none';
 
     if (data.analysis === 'modes'){
       $('modesPanel').style.display = 'block';
@@ -805,6 +867,10 @@
       $('staticPanel').style.display = 'block';
       $('stressPanel').style.display = 'block';
       renderStatic(data, fixedSet);
+    } else if (data.analysis === 'nonlinear'){
+      $('nonlinearPanel').style.display = 'block';
+      $('nonlinearShapePanel').style.display = 'block';
+      renderNonlinear(data, fixedSet);
     } else {
       $('frfPanel').style.display = 'block';
       renderFreqResponse(data);
@@ -1018,6 +1084,91 @@
       'text-anchor': peakX > W - 120 ? 'end' : 'start', 'font-size':'11', 'font-weight':'600', fill:'var(--text)', 'font-family':'var(--font-mono)' });
     peakLbl.textContent = fr.peak_freq_hz.toFixed(1) + ' Hz';
     svgEl.appendChild(peakLbl);
+  }
+
+  // Nonlinear (SOL 6): a load-deflection curve (monitor node, growing softer
+  // past yield) plus a per-load-step deformed-shape viewer driven by chips,
+  // same drawFrame() used by the modes/static panels.
+  function renderNonlinear(data, fixedSet){
+    var curve = data.nonlinear.load_deflection_curve;
+    var svgEl = $('svgNlCurve');
+    svgEl.innerHTML = '';
+    var W = 640, H = 340;
+    var padL = 60, padR = 18, padT = 16, padB = 34;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+
+    var loads = [0].concat(curve.map(function(p){ return p.load_n; }));
+    var defs = [0].concat(curve.map(function(p){ return Math.abs(p.monitor_deflection_mm); }));
+    var xMax = Math.max.apply(null, loads) || 1;
+    var yMax = Math.max.apply(null, defs) * 1.18 || 1;
+
+    function X(l){ return padL + (l / xMax) * plotW; }
+    function Y(d){ return padT + plotH - (d / yMax) * plotH; }
+
+    for (var i = 0; i <= 5; i++){
+      var yv = yMax * i / 5, yy = Y(yv);
+      svgEl.appendChild(el('line', { x1:padL, y1:yy, x2:W-padR, y2:yy, stroke:'var(--border)', 'stroke-width':'1' }));
+      var lbl = el('text', { x:padL-8, y:yy+4, 'text-anchor':'end', 'font-size':'10', fill:'var(--text-faint)', 'font-family':'var(--font-mono)' });
+      lbl.textContent = yv.toFixed(3);
+      svgEl.appendChild(lbl);
+    }
+    for (var i = 0; i <= 5; i++){
+      var xv = xMax * i / 5, xx = X(xv);
+      var lbl2 = el('text', { x:xx, y:H-padB+16, 'text-anchor':'middle', 'font-size':'10', fill:'var(--text-faint)', 'font-family':'var(--font-mono)' });
+      lbl2.textContent = xv.toFixed(0);
+      svgEl.appendChild(lbl2);
+    }
+    var axLbl = el('text', { x:W/2, y:H-4, 'text-anchor':'middle', 'font-size':'10.5', fill:'var(--text-dim)' });
+    axLbl.textContent = 'Load (N)';
+    svgEl.appendChild(axLbl);
+    var yAxLbl = el('text', { x:16, y:padT+plotH/2, 'text-anchor':'middle', 'font-size':'10.5', fill:'var(--text-dim)',
+      transform:'rotate(-90, 16, ' + (padT+plotH/2) + ')' });
+    yAxLbl.textContent = 'Monitor node deflection (mm)';
+    svgEl.appendChild(yAxLbl);
+
+    // linear-elastic reference: slope from the first (smallest, most likely
+    // still-elastic) load step, extrapolated straight out to full load --
+    // the gap between this and the actual curve IS the nonlinearity.
+    if (defs[1] > 0){
+      var slope = defs[1] / loads[1];
+      var refPts = [X(0)+','+Y(0), X(xMax)+','+Y(slope*xMax)];
+      svgEl.appendChild(el('polyline', { points: refPts.join(' '), fill:'none', stroke:'var(--ghost)', 'stroke-width':'1.6', 'stroke-dasharray':'5,4', 'stroke-opacity':'0.7' }));
+    }
+
+    var linePts = loads.map(function(l,i){ return X(l).toFixed(2) + ',' + Y(defs[i]).toFixed(2); });
+    var areaPts = [X(0).toFixed(2)+','+Y(0).toFixed(2)].concat(linePts).concat([X(loads[loads.length-1]).toFixed(2)+','+Y(0).toFixed(2)]);
+    svgEl.appendChild(el('polygon', { points: areaPts.join(' '), fill:'var(--deform-fill)', stroke:'none' }));
+    svgEl.appendChild(el('polyline', { points: linePts.join(' '), fill:'none', stroke:'var(--deform)', 'stroke-width':'2.2', 'stroke-linejoin':'round' }));
+    loads.forEach(function(l, i){
+      svgEl.appendChild(el('circle', { cx:X(l), cy:Y(defs[i]), r:3.6, fill:'var(--deform)', stroke:'var(--surface)', 'stroke-width':'1.3' }));
+    });
+
+    // deformed-shape viewer, one chip per load step
+    var chipsEl = $('nlStepChips');
+    chipsEl.innerHTML = '';
+    var stepIndex = data.nonlinear.steps.length - 1;
+    data.nonlinear.steps.forEach(function(s, i){
+      var chip = document.createElement('div');
+      chip.className = 'chip' + (i===stepIndex ? ' active' : '');
+      chip.innerHTML = '<b>Step ' + s.step + '</b>' + (curve[i].load_n).toFixed(0) + ' N';
+      chip.addEventListener('click', function(){
+        stepIndex = i;
+        Array.prototype.forEach.call(chipsEl.children, function(c,j){ c.classList.toggle('active', j===i); });
+        draw();
+      });
+      chipsEl.appendChild(chip);
+    });
+
+    var svgNl = $('svgNl'), ampSlider = $('ampSliderNl'), label = $('nlStepLabel');
+    function draw(){
+      var s = data.nonlinear.steps[stepIndex];
+      var amp = parseFloat(ampSlider.value);
+      drawFrame(svgNl, data.mesh, s.vectors, amp, 1, fixedSet);
+      label.textContent = 'Load step ' + s.step + ' — ' + curve[stepIndex].load_n.toFixed(0) + ' N (' +
+        (curve[stepIndex].load_factor*100).toFixed(0) + '% of full load)';
+    }
+    ampSlider.oninput = draw;
+    draw();
   }
 
   // ==================== Upload / tet-mesh workflow ====================
